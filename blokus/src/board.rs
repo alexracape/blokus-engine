@@ -16,6 +16,25 @@ const CORNERS_OFFSETS: [i32; 4] = [
 ];
 
 #[derive(Clone)]
+pub struct Action {
+    pub player: usize,
+    pub piece: usize,
+    pub variant: usize,
+    pub offset: usize,
+}
+
+impl Action {
+    pub fn new(player: usize, piece: usize, variant: usize, offset: usize) -> Action {
+        Action {
+            player,
+            piece,
+            variant,
+            offset,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Board {
     pub board: [u8; BOARD_SIZE * BOARD_SIZE], // 20x20 board
     pieces: [Vec<Piece>; 4],
@@ -55,28 +74,28 @@ impl Board {
         Board {
             board: [0; BOARD_SIZE * BOARD_SIZE],
             pieces: player_pieces,
-            anchors: anchors,
+            anchors,
         }
     }
 
-    pub fn is_valid_move(
-        &self,
-        player: usize,
-        piece_variant: &PieceVariant,
-        offset: usize,
-    ) -> bool {
-        // Check piece is within bounds and does not go over edge of board
-        let variant = &piece_variant.variant;
-        let piece_squares = &piece_variant.offsets;
-        if offset + variant.len() > self.board.len() {
-            return false;
-        } else if offset % BOARD_SIZE + piece_variant.width > BOARD_SIZE {
+    pub fn is_valid_move(&self, action: &Action) -> bool {
+        // Get key data
+        let player = action.player;
+        let variant = self.get_piece_variant(action);
+        let piece_squares = variant.offsets;
+        let bits = variant.variant;
+        let offset = action.offset;
+
+        // Check if piece starts at a valid offset
+        let overflow = offset + bits.len() > self.board.len();
+        let wrap_around = offset % BOARD_SIZE + variant.width > BOARD_SIZE;
+        if overflow || wrap_around {
             return false;
         }
 
-        let board_slice = &self.board[offset..offset + variant.len()];
+        let board_slice = &self.board[offset..offset + bits.len()];
         let player_restricted: u8 = 1 << player + 4;
-        let on_blanks = board_slice.iter().zip(variant.iter()).all(|(a, b)| {
+        let on_blanks = board_slice.iter().zip(bits.iter()).all(|(a, b)| {
             if *b {
                 if *a & player_restricted != 0 {
                     return false;
@@ -89,6 +108,26 @@ impl Board {
             .iter()
             .any(|i| self.anchors[player].contains(&(offset + i)));
         on_blanks && on_anchor
+    }
+
+    /// Get a piece variant for a player
+    pub fn get_piece_variant(&self, action: &Action) -> PieceVariant {
+        self.pieces[action.player][action.piece].variants[action.variant].clone()
+    }
+
+    /// Place a piece on the board
+    pub fn place_piece(&mut self, action: &Action) {
+        let variant = self.get_piece_variant(action);
+
+        // Check if move is valid
+        assert!(self.is_valid_move(&action));
+
+        // Break move into tiles and apply individually
+        let offsets = variant.offsets.iter().collect::<Vec<_>>();
+        for tile_offset in offsets.iter() {
+            let tile = action.offset + *tile_offset;
+            self.place_tile(tile, action.player);
+        }
     }
 
     /// Place a tile on the board
@@ -152,9 +191,9 @@ impl Board {
         self.pieces[player].remove(piece);
     }
 
-    pub fn get_scores(&self, last_piece_lens: [u32; 4]) -> Vec<i32> {
+    pub fn get_scores(&self, last_piece_lens: [u32; 4]) -> [i32; 4] {
         // Count the number of pieces on the board for each player
-        let mut scores = vec![0; 4];
+        let mut scores = [0; 4];
         for cell in self.board.iter() {
             let player = *cell & 0b1111;
             if player != 0 {
@@ -219,8 +258,20 @@ mod tests {
     #[test]
     fn test_is_valid_move() {
         let board = Board::new();
-        let piece = PieceVariant::new(vec![vec![true, true]]);
-        assert_eq!(board.is_valid_move(0, &piece, 0), true);
-        assert!(board.is_valid_move(0, &piece, 19) == false);
+        let action = Action {
+            player: 0,
+            piece: 0,
+            variant: 0,
+            offset: 0,
+        };
+        assert_eq!(board.is_valid_move(&action), true);
+
+        let action = Action {
+            player: 0,
+            piece: 3,
+            variant: 0,
+            offset: 19,
+        };
+        assert!(board.is_valid_move(&action) == false);
     }
 }

@@ -58,8 +58,10 @@ pub fn BlokusBoard(props: &Props) -> Html {
 
                         let policy_val = policy[index];
                         // let intensity = (policy_val * 255.0) as u8;
-                        console::log!(policy_val);
-                        let intensity = 10.0 * policy_val * 255.0;
+                        // let intensity = (policy_val.powf(0.3)) * 255.0; // Apply a non-linear scaling to make small values more visible
+                        let epsilon = 1.0; // Small value to avoid log(0)
+                        let intensity = 10.0 * ((policy_val + epsilon).ln()).max(0.0) * 255.0;
+
                         let red = 255.0 - intensity;
                         let blue = 255.0 - intensity;
                         let green = 255.0;
@@ -86,7 +88,8 @@ pub fn BlokusBoard(props: &Props) -> Html {
                             <div>
                             if show_policy && policy_val > 0.0 {
                                 <div id={index.to_string()}  class={square_style} {ondrop} {ondragover}
-                                    style={format!("background-color: {};", color)}>
+                                    style={format!("background-color: {}; font-size: 6px;", color)}>
+                                    <p>{format!("{} %", (policy_val * 1000.0).round()/10.0)}</p>
                                 </div>
                             } else {
                                 <div id={index.to_string()}  class={square_style} {ondrop} {ondragover}></div>

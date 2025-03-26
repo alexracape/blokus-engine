@@ -8,11 +8,10 @@ use yew::events::DragEvent;
 use yew::prelude::*;
 use yew::{function_component, html, Properties};
 
-use blokus::board::BOARD_SIZE;
 
 #[derive(Properties, Clone, PartialEq)]
 pub struct Props {
-    pub board: [u8; BOARD_SIZE * BOARD_SIZE],
+    pub board: Vec<Vec<Vec<bool>>>,
     pub on_board_drop: Callback<(usize, usize, usize)>,
     pub anchors: HashSet<usize>,
     pub policy: Vec<f32>,
@@ -29,6 +28,8 @@ pub fn BlokusBoard(props: &Props) -> Html {
         show_policy,
     } = props.clone();
 
+    let dim = board[0].len();
+
     let ondragover = {
         move |event: DragEvent| {
             event.prevent_default();
@@ -37,27 +38,36 @@ pub fn BlokusBoard(props: &Props) -> Html {
 
     html! {
         <div class="board">
-        {for (0..BOARD_SIZE).map(|i| {
+        {for (0..dim).map(|i| {
 
             html! {
                 <div class="board-row">
                 {
-                    for (0..BOARD_SIZE).map(|j| {
-                        let index = i * BOARD_SIZE + j;
-                        let mut square_style = match board[index] & 0b1111 {
+                    for (0..dim).map(|j| {
+                
+                        // Check each player channel to see who occupies the square
+                        let mut player_option: usize = 0;
+                        for p in 0..4 {
+                            if board[i][j][p] {
+                                player_option = p + 1; // Player 1-indexed
+                                break;
+                            }
+                        }
+
+                        let mut square_style = match player_option {
                             1 => "square red".to_string(),
                             2 => "square blue".to_string(),
                             3 => "square green".to_string(),
                             4 => "square yellow".to_string(),
                             _ => "square empty".to_string(),
                         };
-
+                    
+                        let index = i * dim + j;
                         if anchors.contains(&index) {
                             square_style = format!("{} anchor", square_style);
                         }
 
                         let policy_val = policy[index];
-                        // let intensity = (policy_val * 255.0) as u8;
                         console::log!(policy_val);
                         let intensity = 10.0 * policy_val * 255.0;
                         let red = 255.0 - intensity;

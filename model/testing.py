@@ -51,10 +51,6 @@ def main():
     baseline.to(device)
     baseline.eval()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
-    policy_loss = torch.nn.CrossEntropyLoss().to(device)
-    value_loss = torch.nn.MSELoss().to(device)
-
     # Create the queues and pipes
     manager = mp.Manager()
     model_queue = manager.Queue(maxsize=test_games)

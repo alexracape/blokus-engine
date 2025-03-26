@@ -6,13 +6,12 @@ use std::vec;
 use pyo3::prelude::*;
 
 use crate::node::Node;
-use blokus::board::BOARD_SIZE as D;
 use blokus::game::Game;
 
-const BOARD_SIZE: usize = D * D;
 
 #[derive(FromPyObject)]
 pub struct Config {
+    dim: usize,
     sims_per_move: usize,
     sample_moves: usize,
     c_base: f32,
@@ -22,16 +21,16 @@ pub struct Config {
 }
 
 /// Rotates the policy 90 degrees to the right
-fn rotate_policy(state: Vec<f32>) -> Vec<f32> {
-    let mut rotated = vec![0.0; BOARD_SIZE];
-    for i in 0..D {
-        for j in 0..D {
-            rotated[j * D + (D - 1 - i)] = state[i * D + j];
-        }
-    }
+// fn rotate_policy(state: Vec<f32>) -> Vec<f32> {
+//     let mut rotated = vec![0.0; BOARD_SIZE];
+//     for i in 0..D {
+//         for j in 0..D {
+//             rotated[j * D + (D - 1 - i)] = state[i * D + j];
+//         }
+//     }
 
-    rotated.to_vec()
-}
+//     rotated.to_vec()
+// }
 
 /// Evaluate and Expand the Node
 fn evaluate(
@@ -47,20 +46,20 @@ fn evaluate(
     }
 
     // Get the policy and value from the neural network
-    let representation = game.get_board_state(); // Tested
+    let representation = game.get_game_state();
     let request = (id, representation);
     inference_queue.call_method1("put", (request,))?;
 
     // Wait for the result
     let inference = pipe.call_method0("recv")?;
-    let mut policy: Vec<f32> = inference.get_item(0)?.extract()?;
+    let policy: Vec<f32> = inference.get_item(0)?.extract()?;
     let mut value: Vec<f32> = inference.get_item(1)?.extract()?;
     let current_player = game.current_player();
 
     // Rotate the policy so they are in order
-    for _ in 0..(current_player) {
-        policy = rotate_policy(policy);
-    }
+    // for _ in 0..(current_player) {
+    //     policy = rotate_policy(policy);
+    // }
     value.rotate_right(current_player);
 
     // Normalize policy for node priors, filter out illegal moves
@@ -264,6 +263,10 @@ fn best_action(
     Ok(best_action)
 }
 
+fn random_action(game: &Game) -> Result<usize, String> {
+    Ok(0)
+}
+
 pub fn training_game(
     config: &Config,
     inference_queue: &Bound<PyAny>,
@@ -271,7 +274,7 @@ pub fn training_game(
     id: i32,
 ) -> Result<(Vec<(i32, i32)>, Vec<Vec<(i32, f32)>>, Vec<f32>), String> {
     // Storage for game data
-    let mut game = Game::reset();
+    let mut game = Game::reset(config.dim);
     let mut policies: Vec<Vec<(i32, f32)>> = Vec::new();
 
     // Run self-play to generate data
@@ -295,13 +298,47 @@ pub fn training_game(
     Ok(game_data)
 }
 
+pub fn test_against_random(
+    config: &Config,
+    id: i32,
+    inference_queue: &Bound<PyAny>,
+    pipe: &Bound<PyAny>,
+) -> Result<f32, String> {
+    let mut game = Game::reset(config.dim); 
+    let mut action;
+    while !game.is_terminal() {
+        // Set queue to query for this action
+
+        if game.current_player() == 0 {
+            action = best_action(&game, id, inference_queue, pipe);
+        } else {
+            action = random_action(&game);
+        }
+
+        // Get action to take
+        let tile = match action{
+            Ok(a) => a,
+            Err(e) => {
+                println!("Error running MCTS: {:?}", e);
+                return Err("Error running MCTS".to_string());
+            }
+        };
+
+        // println!("Player {} --- {}", game.current_player(), action);
+        let _ = game.apply(tile, None);
+    }
+    println!("Finished Game");
+    game.board.print_board();
+    Ok(game.get_payoff()[0])
+}
+
 pub fn test_game(
     id: i32,
     model_queue: &Bound<PyAny>,
     baseline_queue: &Bound<PyAny>,
     pipe: &Bound<PyAny>,
 ) -> Result<f32, String> {
-    let mut game = Game::reset();
+    let mut game = Game::reset(20);
     // let mut policies: Vec<Vec<(i32, f32)>> = Vec::new();
 
     // Run self-play to generate data

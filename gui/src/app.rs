@@ -17,7 +17,7 @@ const BOARD_SIZE: usize = 400;
 #[derive(Serialize, Deserialize, Debug)]
 struct GameStateRequest {
     player: usize,
-    data: [[[bool; D]; D]; 5],
+    data: Vec<Vec<Vec<bool>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -27,7 +27,7 @@ struct GameStateResponse {
     status: i32,
 }
 
-fn print_rep(rep: [[[bool; D]; D]; 5]) {
+fn print_rep(rep: &Vec<Vec<Vec<bool>>>) {
     let mut str_rep = String::new();
     for i in 0..5 {
         for j in 0..D {
@@ -48,7 +48,7 @@ fn print_rep(rep: [[[bool; D]; D]; 5]) {
 fn get_state_rep(game: &Game) -> GameStateRequest {
     GameStateRequest {
         player: game.current_player(),
-        data: game.get_board_state(),
+        data: game.get_game_state(),
     }
 }
 
@@ -67,7 +67,7 @@ fn rotate_policy(state: Vec<f32>) -> Vec<f32> {
 /// Query the model server
 async fn query_model(state: &Game) -> Result<GameStateResponse, String> {
     let request = get_state_rep(state);
-    print_rep(request.data);
+    print_rep(&request.data);
     let serialized_request = serde_json::to_string(&request).unwrap();
     let current_player = state.current_player();
 
@@ -158,7 +158,7 @@ fn alert_game_over(game: &Game) {
 
 #[function_component]
 pub fn App() -> Html {
-    let state = use_state(|| Game::reset());
+    let state = use_state(|| Game::reset(D));
     let show_eval = use_state(|| false);
     let show_policy = use_state(|| false);
     let policy = use_state(|| vec![0.0; 400]);
@@ -225,7 +225,7 @@ pub fn App() -> Html {
 
     let on_reset = {
         let state = state.clone();
-        Callback::from(move |_| state.set(Game::reset()))
+        Callback::from(move |_| state.set(Game::reset(D)))
     };
 
     let toggle_eval = {
@@ -273,7 +273,7 @@ pub fn App() -> Html {
                 </div>
 
                 <div class="main-board">
-                    <BlokusBoard board={state.get_board()} policy={(*policy).clone()} show_policy={*show_policy} on_board_drop={on_board_drop} anchors={state.get_current_anchors()} />
+                    <BlokusBoard board={state.get_board_state()} policy={(*policy).clone()} show_policy={*show_policy} on_board_drop={on_board_drop} anchors={state.get_current_anchors()} />
                 </div>
 
                 <div class="side-panel">

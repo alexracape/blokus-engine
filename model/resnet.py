@@ -2,9 +2,6 @@ import torch
 import torch.nn as nn
 
 
-DIM = 20
-
-
 class ResidualBlock(nn.Module):
 
     def __init__(self, in_channels, out_channels):
@@ -41,11 +38,12 @@ class ResNet(nn.Module):
     outcome of the game for each player. The value is between 0 and 1.
     """
 
-    def __init__(self, blocks, width, custom_filters=False):
+    def __init__(self, blocks, width, game_dim=20):
         super(ResNet, self).__init__()
+        self.dim = game_dim
+        self.max_dim = 20
         self.blocks = blocks
         self.width = width
-        self.custom_filters = custom_filters
         self.piece_filters = []
 
         self.input = nn.Conv2d(5, width, kernel_size=3, padding=1)
@@ -61,7 +59,7 @@ class ResNet(nn.Module):
             nn.BatchNorm2d(1),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(DIM * DIM, 4),
+            nn.Linear(self.max_dim * self.max_dim, 4),
             nn.Tanh(),
         )
 

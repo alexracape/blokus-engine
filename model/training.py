@@ -16,7 +16,6 @@ from tensordict import tensorclass
 from blokus_self_play import play_training_game
 from resnet import ResNet
 
-DIM = 20
 MODEL_PATH = "./weights"
 
 @tensorclass
@@ -26,7 +25,7 @@ class Data:
     scores: torch.Tensor
 
 
-def empty_queue(queue, device):
+def empty_queue(queue, device, dim):
     ids = []
     items = []
     while True:
@@ -37,10 +36,10 @@ def empty_queue(queue, device):
         except Empty as e:
             break
 
-    return ids, torch.tensor(items, dtype=torch.float32).view(-1, 5, DIM, DIM).to(device)
+    return ids, torch.tensor(items, dtype=torch.float32).view(-1, 5, dim, dim).to(device)
 
 
-def handle_inference_batch(model, device, inference_queue, pipes_to_workers):
+def handle_inference_batch(model, dim, device, inference_queue, pipes_to_workers):
     """Process batches of inputs from the self-play games
 
     Tries to create a batch of size num_workers // 2 from the inference queue.
@@ -50,7 +49,7 @@ def handle_inference_batch(model, device, inference_queue, pipes_to_workers):
     """
 
     time.sleep(.001)
-    ids, batch = empty_queue(inference_queue, device)
+    ids, batch = empty_queue(inference_queue, device, dim)
     num_requests = len(ids)
     if num_requests == 0:
         return 0
@@ -67,7 +66,7 @@ def handle_inference_batch(model, device, inference_queue, pipes_to_workers):
     return num_requests
 
 
-def save(game, buffer: ReplayBuffer,):
+def save(game, buffer: ReplayBuffer, dim=20):
     """Save the game data to the replay buffer"""
 
     # Allocate space for the data
@@ -75,13 +74,13 @@ def save(game, buffer: ReplayBuffer,):
     num_moves = len(history)
     logging.debug(f"Saving game with {num_moves} moves to the replay buffer")
 
-    state_data = torch.zeros(num_moves, 5, DIM, DIM, dtype=torch.float32)
-    policy_data = torch.zeros(num_moves, DIM * DIM, dtype=torch.float32)
+    state_data = torch.zeros(num_moves, 5, dim, dim, dtype=torch.float32)
+    policy_data = torch.zeros(num_moves, dim * dim, dtype=torch.float32)
     value_data = torch.tensor(values, dtype=torch.float32).repeat(num_moves, 1)
 
     # For each move from this game, update the state and policy
     # new_state holds running game state
-    new_state = torch.zeros(5, DIM, DIM, dtype=torch.float32)
+    new_state = torch.zeros(dim, dim, 5, dtype=torch.float32)
     for i, (move, policy) in enumerate(zip(history, policies)):
 
         # Shift the state to the correct player's perspective
@@ -94,15 +93,15 @@ def save(game, buffer: ReplayBuffer,):
             policy_data[i, action] = prob
 
             # Update which squares are legal on this move
-            row, col = action // DIM, action % DIM
+            row, col = action // dim, action % dim
             state_data[i, 4, row, col] = 1
 
         # Rotate state and policy so perspective is the same
-        state_data[i] = torch.rot90(state_data[i], k=player, dims=(1, 2))
-        policy_data[i] = torch.rot90(policy_data[i].reshape(DIM, DIM), k=player).reshape(-1)
+        # state_data[i] = torch.rot90(state_data[i], k=player, dims=(1, 2))
+        # policy_data[i] = torch.rot90(policy_data[i].reshape(dim, dim), k=player).reshape(-1)
 
         # Make the move that was made
-        row, col = tile // DIM, tile % DIM
+        row, col = tile // dim, tile % dim
         new_state[player, row, col] = 1
 
         # if  i < 20:
@@ -131,9 +130,12 @@ def train(step, model, buffer, optimizer, policy_loss, value_loss, device, testi
 
     # Train the model
     optimizer.zero_grad()
-    policy, value = model(inputs, training=True)
-    policy_loss = policy_loss(policy, policies)
-    value_loss = value_loss(value, values)
+    policy_logits, value_logits = model(inputs, training=True) # [b, d, d]. [b, 4]
+    mask = inputs[:, :, :, 4].view(inputs.size(0), -1)
+    masked_policy_logits = policy_logits.masked_fill(mask, -1e9)
+
+    policy_loss = policy_loss(masked_policy_logits, policies)
+    value_loss = value_loss(value_logits, values)
     loss = policy_loss + value_loss
     loss.backward()
     optimizer.step()
@@ -157,6 +159,7 @@ def main():
     # Parse args for number of CPUs and testing mode
     parser = argparse.ArgumentParser(description="Training the Blokus Deep Neural Network with Self-Play")
     parser.add_argument('--test', action='store_true', help="Run the program in testing mode")
+    parser.add_argument('--dim', type=int, default=20, help="Dimension of game board (default: 20)")
     parser.add_argument('--cpus', type=int, default=1, help="Number of CPUs to use (default: 1)")
     parser.add_argument('--load', type=str, help="Path to load starting model")
     parser.add_argument('--save', type=str, help="Path to save model to")
@@ -173,13 +176,13 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f"Using device: {device}")
     if args.test:
-        config = TestConfig(args.cpus)
+        config = TestConfig(args.dim, args.cpus)
     else:
-        config = Config(args.cpus)
+        config = Config(args.dim, args.cpus)
 
 
     # Create the model, optimizer, and loss
-    model = ResNet(config.nn_depth, config.nn_width, config.custom_filters)
+    model = ResNet(config.nn_depth, config.nn_width)
     if args.load:
         model.load_state_dict(torch.load(args.load, weights_only=True, map_location=device))
     model.to(device)
@@ -187,7 +190,7 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     policy_loss = torch.nn.CrossEntropyLoss().to(device)
-    value_loss = torch.nn.MSELoss().to(device)
+    value_loss = torch.nn.CrossEntropyLoss().to(device)
 
     # Configure Weights and Biases
     if not args.test:
@@ -226,7 +229,7 @@ def main():
             total_requests_ish = config.requests_per_round()
             pbar = tqdm(total=total_requests_ish, desc=f"Self-Play Requests Round {round}")
             while not game_data.ready():
-                num_requests = handle_inference_batch(model, device, request_queue, pipes_to_workers)
+                num_requests = handle_inference_batch(model, config.dim, device, request_queue, pipes_to_workers)
                 pbar.update(num_requests)
             pbar.close()
 
@@ -260,23 +263,20 @@ class Config:
         c_init = 1.25
         dirichlet_alpha = 0.3
         exploration_fraction = 0.25
-
-    ~2.5 hours per round right now
-    TODO: Figure out how to tune this
     """
 
-    def __init__(self, num_cpus):
-        self.training_rounds = 20
+    def __init__(self, dim=20, num_cpus=1):
+        self.dim = dim
+        self.training_rounds = 10
 
         self.buffer_capacity = 500000
         self.learning_rate = 0.01
         self.weight_decay = 1e-4
-        self.batch_size = 512
+        self.batch_size = 256
         self.training_steps = 500
         self.cpus = num_cpus
         self.games_per_cpu = 4
 
-        self.custom_filters = True
         self.nn_width = 256
         self.nn_depth = 10
 
@@ -294,13 +294,14 @@ class Config:
         return self.cpus * self.games_per_cpu
 
     def requests_per_round(self):
-        return self.games_per_round() *  DIM**2 * (self.sims_per_move + 2)
+        return self.games_per_round() *  self.dim**2 * (self.sims_per_move + 2)
 
 
 class TestConfig(Config):
     """Configuration with testing values to speed things up"""
 
-    def __init__(self, num_cpus):
+    def __init__(self, dim=20, num_cpus=1):
+        self.dim = dim
         self.training_rounds = 2
 
         self.buffer_capacity = 500000
@@ -311,7 +312,6 @@ class TestConfig(Config):
         self.cpus = num_cpus
         self.games_per_cpu = 4
 
-        self.custom_filters = True
         self.nn_width = 256
         self.nn_depth = 10
 

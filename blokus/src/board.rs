@@ -189,7 +189,7 @@ impl Board {
 
     pub fn get_rep(&self, current_player: usize) -> Vec<Vec<Vec<bool>>> {
         let spaces = self.dim * self.dim;
-        let mut board_state = vec![vec![vec![false; self.dim]; self.dim]; 5];
+        let mut board_state = vec![vec![vec![false; self.dim]; self.dim]; 4];
         for i in 0..spaces {
             let player = (self.board[i] & 0b1111) as usize; // check if there is a player piece
             if player != 0 {
@@ -256,8 +256,8 @@ mod tests {
 
     #[test]
     fn test_rep() {
-        let mut board = Board::new(3); // 3x3 board
-        let mut expected = vec![vec![vec![false; 3]; 3]; 4];
+        let mut board = Board::new(5); // 3x3 board
+        let mut expected = vec![vec![vec![false; 5]; 5]; 4];
         assert!(board.get_rep(0) == expected);
 
         board.place_tile(0, 0);

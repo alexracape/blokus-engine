@@ -20,8 +20,6 @@ from resnet import ResNet
 from training import TestConfig, handle_inference_batch
 from blokus_self_play import play_test_game
 
-DIM = 20
-
 
 def main():
     """Run a model against another in multiple rounds of self-play testing

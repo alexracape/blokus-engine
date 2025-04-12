@@ -38,9 +38,9 @@ class ResNet(nn.Module):
     outcome of the game for each player. The value is between 0 and 1.
     """
 
-    def __init__(self, blocks, width, game_dim=20):
+    def __init__(self, depth, width, dim):
         super(ResNet, self).__init__()
-        self.dim = game_dim
+        self.dim = dim
         self.max_dim = 20
         self.blocks = blocks
         self.width = width

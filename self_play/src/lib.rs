@@ -3,7 +3,7 @@ mod simulation;
 
 use pyo3::prelude::*;
 use simulation::Config;
-use simulation::{test_game, training_game, test_against_random};
+use simulation::Runtime;
 
 /// Works with Pytorch model to generate self-play data
 #[pyfunction]
@@ -15,10 +15,14 @@ fn play_training_game(
 ) -> PyResult<(Vec<(i32, i32)>, Vec<Vec<(i32, f32)>>, Vec<f32>)> {
     Python::with_gil(|py| {
         let config: Config = config.extract::<Config>(py).unwrap();
-        let i_queue = inference_queue.bind(py);
-        let r_queue = pipe.bind(py);
+        let runtime = Runtime {
+            config,
+            id,
+            queue:  inference_queue.bind(py),
+            pipe:   pipe.bind(py)
+        };
 
-        match training_game(&config, i_queue, r_queue, id) {
+        match runtime.training_game() {
             Ok(data) => Ok(data),
             Err(e) => {
                 return Err(PyErr::new::<pyo3::exceptions::PyException, _>(format!(
@@ -40,10 +44,14 @@ fn play_test_against_random(
 ) -> PyResult<f32> {
     Python::with_gil(|py| {
         let config: Config = config.extract::<Config>(py).unwrap();
-        let inference_queue = inference_queue.bind(py);
-        let response_pipe = pipe.bind(py);
+        let runtime = Runtime {
+            config,
+            id,
+            queue:  inference_queue.bind(py),
+            pipe:   pipe.bind(py)
+        };
 
-        match test_against_random(&config, id, inference_queue, response_pipe) {
+        match runtime.test_against_random() {
             Ok(score) => Ok(score),
             Err(e) => {
                 return Err(PyErr::new::<pyo3::exceptions::PyException, _>(format!(
@@ -58,16 +66,23 @@ fn play_test_against_random(
 #[pyfunction]
 fn play_test_game(
     id: i32,
+    config: PyObject,
     model_queue: PyObject,
     baseline_queue: PyObject,
     pipe: PyObject,
 ) -> PyResult<f32> {
     Python::with_gil(|py| {
+        let config: Config = config.extract::<Config>(py).unwrap();
         let model_queue = model_queue.bind(py);
         let baseline_queue = baseline_queue.bind(py);
-        let response_pipe = pipe.bind(py);
+        let mut runtime = Runtime {
+            config,
+            id,
+            queue:  model_queue,
+            pipe:   pipe.bind(py)
+        };
 
-        match test_game(id, model_queue, baseline_queue, response_pipe) {
+        match runtime.test_game(model_queue, baseline_queue) {
             Ok(score) => Ok(score),
             Err(e) => {
                 return Err(PyErr::new::<pyo3::exceptions::PyException, _>(format!(

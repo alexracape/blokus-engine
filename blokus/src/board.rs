@@ -8,6 +8,12 @@ use crate::pieces::{Piece, PieceVariant, PIECE_TYPES};
 
 const TOTAL_TILES: i32 = 89;
 
+#[derive(Clone)]
+pub enum RepType {
+    Channel,
+    Token,
+}
+
 
 #[derive(Clone)]
 pub struct Board {
@@ -187,7 +193,31 @@ impl Board {
         scores
     }
 
-    pub fn get_rep(&self, current_player: usize) -> Vec<Vec<Vec<bool>>> {
+    pub fn get_rep(&self, rep: RepType, current_player: usize) -> Vec<Vec<Vec<bool>>>{
+        match rep {
+            RepType::Channel => self.get_channel_rep(current_player),
+            RepType::Token =>self.get_token_rep(current_player)
+        }
+    }
+
+    fn get_token_rep(&self, current_player: usize) -> Vec<Vec<Vec<bool>>> {
+        let spaces = self.dim * self.dim;
+        let mut board_state = vec![vec![vec![false; 4]; self.dim]; self.dim];
+        for i in 0..spaces {
+            let player = (self.board[i] & 0b1111) as usize; // check if there is a player piece
+            if player != 0 {
+                // Player here is 1 indexed because 0 is empty
+                let player_slot = (4 + (player - 1) - current_player) % 4; // orient to current player (0 indexed)
+                let row = i / self.dim;
+                let col = i % self.dim;
+                board_state[row][col][player_slot] = true;
+            }
+        }
+
+        return board_state
+    }
+
+    fn get_channel_rep(&self, current_player: usize) -> Vec<Vec<Vec<bool>>> {
         let spaces = self.dim * self.dim;
         let mut board_state = vec![vec![vec![false; self.dim]; self.dim]; 4];
         for i in 0..spaces {
@@ -258,16 +288,19 @@ mod tests {
     fn test_rep() {
         let mut board = Board::new(5); // 3x3 board
         let mut expected = vec![vec![vec![false; 5]; 5]; 4];
-        assert!(board.get_rep(0) == expected);
+        assert!(board.get_rep(RepType::Channel, 0) == expected);
 
         board.place_tile(0, 0);
         expected[0][0][0] = true;
-        assert!(board.get_rep(0) == expected);
+        assert!(board.get_rep(RepType::Channel, 0) == expected);
         expected[0][0][0] = false;
 
         expected[3][0][0] = true;
-        assert!(board.get_rep(1) == expected);
+        assert!(board.get_rep(RepType::Channel, 1) == expected);
         expected[3][0][0] = false;
+
+        expected = vec![vec![vec![false; 4]; 5]; 5];
+        assert!(board.get_rep(RepType::Token, 0) == expected);
     }
 
 

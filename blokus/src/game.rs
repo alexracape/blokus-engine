@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 
-use crate::board::Board;
+use crate::board::{Board, RepType};
 use crate::pieces::{Piece, PieceVariant};
 
 const NUM_PLAYERS: usize = 4;
@@ -277,23 +277,34 @@ impl Game {
     }
 
     pub fn get_board_state(&self) -> Vec<Vec<Vec<bool>>> {
-        self.board.get_rep(0)
+        self.board.get_rep(RepType::Channel, 0)
     }
 
-    pub fn get_game_state(&self) -> Vec<Vec<Vec<bool>>> {
-        let mut board_rep = self.board.get_rep(self.current_player);
+    pub fn get_game_state(&self, format: RepType) -> Vec<Vec<Vec<bool>>> {
+        let mut board_rep = self.board.get_rep(format.clone(), self.current_player);
+        let dim = self.board.get_dim();
+        let legal_moves = self.get_legal_tiles();
 
         // Get rep for the legal spaces
-        let dim = self.board.get_dim();
-        let mut legal_move_rep = vec![vec![false; dim]; dim];
-        let legal_moves = self.get_legal_tiles();
-        for tile in legal_moves {
-            let row = tile / dim;
-            let col = tile % dim;
-            legal_move_rep[row][col] = true;
+        match format {
+            RepType::Channel => {
+                let mut legal_move_rep = vec![vec![false; dim]; dim];
+                for tile in legal_moves {
+                    let row = tile / dim;
+                    let col = tile % dim;
+                    legal_move_rep[row][col] = true;
+                }
+                board_rep.push(legal_move_rep);
+            },
+            RepType::Token => {
+                for row in 0..dim {
+                    for col in 0..dim {
+                        let tile = row * dim + col;
+                        board_rep[row][col].push(legal_moves.contains(&tile));
+                    }
+                }
+            }
         }
-
-        board_rep.push(legal_move_rep);
 
         // Rotate the board to the current player perspective
         // Comment out for now for simplicity

@@ -9,6 +9,7 @@ use yew::prelude::*;
 use crate::board::BlokusBoard;
 use crate::pieces::PieceTray;
 use blokus::game::Game;
+use blokus::board::RepType;
 
 const SERVER_ADDRESS: &str = "http://127.0.0.1:8000/process_request";
 const D: usize = 20;
@@ -48,7 +49,7 @@ fn print_rep(rep: &Vec<Vec<Vec<bool>>>) {
 fn get_state_rep(game: &Game) -> GameStateRequest {
     GameStateRequest {
         player: game.current_player(),
-        data: game.get_game_state(),
+        data: game.get_game_state(RepType::Token),
     }
 }
 

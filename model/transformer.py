@@ -8,7 +8,6 @@ import torch.nn.functional as F
 class BlokusTransformer(nn.Module):
     def __init__(self, 
                  d_max=20,      # maximum board dimension
-                 input_dim=5,   # input channels per cell (4 occupancy + 1 legal mask)
                  embed_dim=128, # dimension of the transformer embeddings
                  num_heads=4,
                  mlp_dim=256,   # dimension of feedforward layer in TransformerEncoderLayer
@@ -16,7 +15,7 @@ class BlokusTransformer(nn.Module):
                  dropout=0.1):
         super().__init__()
         
-        self.input_proj = nn.Linear(input_dim, embed_dim)
+        self.input_proj = nn.Linear(5, embed_dim)
         self.pos_embed_2d = nn.Parameter(torch.zeros(d_max, d_max, embed_dim))
         nn.init.trunc_normal_(self.pos_embed_2d, std=0.02)
 
@@ -49,7 +48,7 @@ class BlokusTransformer(nn.Module):
         x = self.input_proj(x)
         
         # Add positional embeddings
-        pos_embed_slice = self.pos_embed_2d[:d, :d, :].view(d*d, -1)  # [d*d, embed_dim]
+        pos_embed_slice = self.pos_embed_2d[:d, :d, :].reshape(d*d, -1)  # [d*d, embed_dim]
         pos_embed_slice = pos_embed_slice.unsqueeze(0)  # [1, d*d, embed_dim]
         x = x + pos_embed_slice
 
@@ -60,7 +59,7 @@ class BlokusTransformer(nn.Module):
         board_tokens = x[:, 1:, :]
         cls_tokens = x[:, 0, :]
 
-        policy_logits = self.policy_head(board_tokens).view(batch_size, d, d) # [batch_size, d, d]
+        policy_logits = self.policy_head(board_tokens).view(batch_size, d*d) # [batch_size, d * d]
         value_logits = self.value_head(cls_tokens)  # [batch_size, 4]
         
         return policy_logits, value_logits

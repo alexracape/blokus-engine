@@ -42,12 +42,12 @@ class ResNet(nn.Module):
         super(ResNet, self).__init__()
         self.dim = dim
         self.max_dim = 20
-        self.blocks = blocks
+        self.blocks = depth
         self.width = width
         self.piece_filters = []
 
         self.input = nn.Conv2d(5, width, kernel_size=3, padding=1)
-        self.res_blocks = nn.ModuleList([ResidualBlock(width, width) for _ in range(blocks)])
+        self.res_blocks = nn.ModuleList([ResidualBlock(width, width) for _ in range(depth)])
         self.policy_head = nn.Sequential(
             nn.Conv2d(width, 1, kernel_size=1),
             nn.BatchNorm2d(1),

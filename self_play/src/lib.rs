@@ -10,28 +10,21 @@ use simulation::Runtime;
 fn play_training_game(
     id: i32,
     config: PyObject,
+    result_queue: PyObject,
     inference_queue: PyObject,
     pipe: PyObject,
-) -> PyResult<(Vec<(i32, i32)>, Vec<Vec<(i32, f32)>>, Vec<f32>)> {
+) -> u8 {
     Python::with_gil(|py| {
         let config: Config = config.extract::<Config>(py).unwrap();
         let runtime = Runtime {
             config,
             id,
+            result_queue: result_queue.bind(py),
             queue:  inference_queue.bind(py),
             pipe:   pipe.bind(py)
         };
 
-        match runtime.training_game() {
-            Ok(data) => Ok(data),
-            Err(e) => {
-                return Err(PyErr::new::<pyo3::exceptions::PyException, _>(format!(
-                    "{:?}",
-                    e
-                )))
-            }
-        }
-
+        runtime.training_game()
     })
 }
 
@@ -39,27 +32,21 @@ fn play_training_game(
 fn play_test_against_random(
     id: i32,
     config: PyObject,
+    result_queue: PyObject,
     inference_queue: PyObject,
     pipe: PyObject,
-) -> PyResult<f32> {
+) -> u8 {
     Python::with_gil(|py| {
         let config: Config = config.extract::<Config>(py).unwrap();
         let runtime = Runtime {
             config,
             id,
+            result_queue: result_queue.bind(py),
             queue:  inference_queue.bind(py),
             pipe:   pipe.bind(py)
         };
 
-        match runtime.test_against_random() {
-            Ok(score) => Ok(score),
-            Err(e) => {
-                return Err(PyErr::new::<pyo3::exceptions::PyException, _>(format!(
-                    "{:?}",
-                    e
-                )))
-            }
-        }
+        runtime.test_against_random() 
     })
 }
 
@@ -67,6 +54,7 @@ fn play_test_against_random(
 fn play_test_game(
     id: i32,
     config: PyObject,
+    result_queue: PyObject,
     model_queue: PyObject,
     baseline_queue: PyObject,
     pipe: PyObject,
@@ -78,6 +66,7 @@ fn play_test_game(
         let mut runtime = Runtime {
             config,
             id,
+            result_queue: result_queue.bind(py),
             queue:  model_queue,
             pipe:   pipe.bind(py)
         };

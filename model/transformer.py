@@ -16,8 +16,8 @@ class BlokusTransformer(nn.Module):
         super().__init__()
         
         self.input_proj = nn.Linear(5, embed_dim)
-        self.pos_embed_2d = nn.Parameter(torch.zeros(d_max, d_max, embed_dim))
-        nn.init.trunc_normal_(self.pos_embed_2d, std=0.02)
+        self.pos_embed = nn.Parameter(torch.zeros(d_max * d_max, embed_dim))
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         
@@ -30,36 +30,32 @@ class BlokusTransformer(nn.Module):
         self.policy_head = nn.Linear(embed_dim, 1)
         self.value_head = nn.Linear(embed_dim, 4)
         
-    def forward(self, board_tensor):
+    def forward(self, x):
         """
-        board_tensor: shape [batch_size, d, d, input_dim]
+        board_tensor: shape [batch_size, d, input_dim]
                       each cell has input_dim=5 features (4 occupancy bits + 1 legal bit)
         
         Returns:
             policy_logits: [batch_size, d, d]
             value:         [batch_size, 4]
         """
-        batch_size, d, _, _ = board_tensor.shape
-
-        # Flatten board cells: [batch_size, d*d, input_dim]
-        x = board_tensor.view(batch_size, d*d, -1)
+        batch_size, d, _ = x.shape 
         
         # Project to embedding dim: [batch_size, d*d, embed_dim]
         x = self.input_proj(x)
         
         # Add positional embeddings
-        pos_embed_slice = self.pos_embed_2d[:d, :d, :].reshape(d*d, -1)  # [d*d, embed_dim]
-        pos_embed_slice = pos_embed_slice.unsqueeze(0)  # [1, d*d, embed_dim]
+        pos_embed_slice = self.pos_embed[:d, :].unsqueeze(0)  # [1, d, embed_dim]
         x = x + pos_embed_slice
 
         init_cls_tokens = self.cls_token.expand(batch_size, -1, -1)
         x = torch.cat([init_cls_tokens, x], dim=1)
         
-        x = self.transformer(x)  # [batch_size, 1 + d*d, embed_dim]
+        x = self.transformer(x)  # [batch_size, 1 + d, embed_dim]
         board_tokens = x[:, 1:, :]
         cls_tokens = x[:, 0, :]
 
-        policy_logits = self.policy_head(board_tokens).view(batch_size, d*d) # [batch_size, d * d]
+        policy_logits = self.policy_head(board_tokens).view(batch_size, d) # [batch_size, d]
         value_logits = self.value_head(cls_tokens)  # [batch_size, 4]
         
         return policy_logits, value_logits
@@ -71,7 +67,6 @@ if __name__ == "__main__":
     d = 8
     test_input = torch.randn(batch_size, d, d, 5)  # e.g. random board states
     model = BlokusTransformer(d_max=20, 
-                              input_dim=5, 
                               embed_dim=64, 
                               num_heads=4, 
                               mlp_dim=128, 

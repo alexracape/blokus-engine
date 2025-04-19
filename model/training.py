@@ -1,5 +1,4 @@
-import multiprocessing as mp
-mp.set_start_method('spawn', force=True)
+import torch.multiprocessing as mp
 
 import argparse
 import logging
@@ -13,7 +12,7 @@ import torch
 from torchrl.data import ReplayBuffer, LazyTensorStorage
 from tensordict import TensorDict
 
-from blokus_self_play import play_training_game
+from blokus_self_play import play_training_game, play_test_against_random
 from resnet import ResNet
 from transformer import BlokusTransformer
 
@@ -21,6 +20,10 @@ MODEL_PATH = "./weights"
 CHANNEL = 1
 TOKEN = 2
 
+BLUE = '\033[94m'
+RESET = '\033[0m'
+
+logging.basicConfig(format=f'{BLUE}blokus:{RESET} %(message)s', level=logging.INFO)
 
 
 class TrainingContext:
@@ -34,6 +37,20 @@ class TrainingContext:
         self.value_loss = value_loss
         self.device = device
         self.testing = testing
+
+
+class IPC:
+    """Package communciation objects"""
+
+    def __init__(self, num_workers):
+        self.manager = mp.Manager()
+        self.request_queue = self.manager.Queue()
+        self.pipes_from_model = []
+        self.pipes_to_workers = []
+        for i in range(num_workers):
+            recv, send = mp.Pipe(duplex=False)
+            self.pipes_from_model.append(recv)
+            self.pipes_to_workers.append(send)
 
 
 class Config:
@@ -57,6 +74,7 @@ class Config:
         self.dim = dim
         self.rep = TOKEN
         self.training_rounds = 10
+        self.eval_games = 100
         self.transformer = {
             "d_max": 20,
             "embed_dim": 128,
@@ -75,14 +93,11 @@ class Config:
         self.learning_rate = 0.01
         self.weight_decay = 1e-4
         self.batch_size = 256
-        self.training_steps = 500
+        self.training_steps = 1000
         self.workers = num_workers
         self.games_per_worker = 4
 
-        self.nn_width = 256
-        self.nn_depth = 10
-
-        self.sims_per_move = 50
+        self.sims_per_move = 100
         self.sample_moves = 30
         self.c_base = 19652
         self.c_init = 1.25
@@ -106,6 +121,7 @@ class TestConfig(Config):
         self.dim = dim
         self.rep = TOKEN
         self.training_rounds = 2
+        self.eval_games = 10
         self.transformer = {
             "d_max": 20,
             "embed_dim": 16,
@@ -136,35 +152,33 @@ class TestConfig(Config):
         self.exploration_fraction = 0.5
 
 
-def empty_queue(queue, device, dim, rep):
-    ids = []
-    items = []
+def empty_queue(queue):
+    ids, items = [], []
     while True:
         try:
-            id, input = queue.get(block=False)
+            id, data = queue.get(block=False)
             ids.append(id)
-            items.append(input)
+            items.append(data)
         except Empty as e:
             break
 
-    if rep == CHANNEL:
-        requests = torch.tensor(items, dtype=torch.float32).view(-1, 5, dim, dim).to(device)
-    else:
-        requests = torch.tensor(items, dtype=torch.float32).view(-1, dim, dim, 5).to(device)
+    return ids, items
 
-    return ids, requests
-
-def handle_inference_batch(config, context, inference_queue, pipes_to_workers):
+def handle_inference_batch(config, context, ipc):
     """Process batches of inputs from the self-play games
 
-    Tries to create a batch of size num_workers // 2 from the inference queue.
-    If this runs for too long, there are likely stragglers in the queue and we
-    should just empty the queue with what is left. All batches are sent to the
+    All batches are sent to the
     GPU for processing and the outputs are sent back to the appropriate worker.
     """
 
-    time.sleep(.00001)
-    ids, batch = empty_queue(inference_queue, context.device, config.dim, config.rep)
+    time.sleep(.0001)
+    ids, requests = empty_queue(ipc.inference_queue)
+    if config.rep == CHANNEL:
+        batch = torch.tensor(requests, dtype=torch.float32).view(-1, 5, config.dim, config.gdim).to(config.device)
+    else:
+        batch = torch.tensor(requests, dtype=torch.float32).view(-1, config.dim * config.dim, 5).to(config.device)
+
+
     num_requests = len(ids)
     if num_requests == 0:
         return 0
@@ -176,9 +190,27 @@ def handle_inference_batch(config, context, inference_queue, pipes_to_workers):
     # Send the outputs to the appropriate worker
     for i, id in enumerate(ids):
         response = (policies[i].cpu().tolist(), values[i].cpu().tolist())
-        pipes_to_workers[id].send(response)
+        ipc.pipes_to_workers[id].send(response)
 
     return num_requests
+
+
+def handle_result_batch(ipc):
+    # TODO
+    return
+
+
+def handle_inference_requests(config, context, ipc, data):
+    total_requests_ish = config.requests_per_round()
+    pbar = tqdm(total=total_requests_ish, desc=f"Self-Play Requests")
+    while len(data) != config.num_workers:
+        # Handle requests
+        num_requests = handle_inference_batch(config, context, ipc)
+        pbar.update(num_requests)
+
+        # Check for results
+
+    pbar.close()
 
 
 def save(game, buffer: ReplayBuffer, config: Config):
@@ -193,59 +225,73 @@ def save(game, buffer: ReplayBuffer, config: Config):
     if config.rep == CHANNEL:
         shape = [5, dim, dim]
     else:
-        shape = [dim, dim, 5]
+        shape = [dim * dim, 5]
     
     state_data = torch.zeros(num_moves, *shape, dtype=torch.float32)
     policy_data = torch.zeros(num_moves, dim * dim, dtype=torch.float32)
     value_data = torch.tensor(values, dtype=torch.float32).repeat(num_moves, 1)
 
     # For each move from this game, update the state and policy
-    # new_state holds running game state
-    new_state = torch.zeros(*shape, dtype=torch.float32)
+    prev_player = 0
     for i, (move, policy) in enumerate(zip(history, policies)):
 
-        # Shift the state to the correct player's perspective
+        # Shift the state to the current player's perspective
         player, tile = move
-        if config.rep == CHANNEL:
-            blank_legals = torch.zeros(dim, dim).unsqueeze(0)
-            rolled = torch.roll(new_state[:4], shifts=-1, dims=0)
-            state_data[i] = torch.cat((rolled, blank_legals), dim=0)
-        else:
-            blank_legals = torch.zeros(dim, dim).unsqueeze(2)
-            rolled = torch.roll(new_state[:, :, :4], shifts=-1, dims=2)
-            state_data[i] = torch.cat((rolled, blank_legals), dim=2)
-            
+        player_dif = (player - prev_player) % 4
+        is_token = config.rep == TOKEN
+        player_dim = 1 if is_token else 0
+        state_slice = state_data[i][:, :4] if is_token else state_data[i][:4]
+        board = torch.roll(state_slice, shifts=-player_dif, dims=player_dim) if player_dif else state_slice
+        
+        # Reset the legal tiles all to 0
+        blank_legals = torch.zeros(dim * dim) if is_token else torch.zeros(dim, dim)
+        blank_legals = blank_legals.unsqueeze(player_dim)
+        
+        # Put state rep back together with board reoriented and legals reset
+        state_data[i] = torch.cat((board, blank_legals), dim=player_dim)
 
-        # Update the policy for this move
+        # Update the policy for this state
         for element in policy:
             action, prob = element
             policy_data[i, action] = prob
 
             # Update which squares are legal on this move
-            row, col = action // dim, action % dim
-            if config.rep == CHANNEL:
-                state_data[i, 4, row, col] = 1
+            if is_token:
+                state_data[i, action, 4] = 1
             else:
-                state_data[i, row, col, 4] = 1
+                row, col = action // dim, action % dim
+                state_data[i, 4, row, col] = 1
 
 
         # Rotate state and policy so perspective is the same
         # state_data[i] = torch.rot90(state_data[i], k=player, dims=(1, 2))
         # policy_data[i] = torch.rot90(policy_data[i].reshape(dim, dim), k=player).reshape(-1)
-        value_data[i] = torch.roll(value_data[i], -i % 4)
 
-        # Make the move that was made
-        row, col = tile // dim, tile % dim
-        if config.rep == CHANNEL:
-            new_state[player, row, col] = 1
+        # Update values
+        if player_dif:
+            value_data[i] = torch.roll(value_data[i-1], -player_dif)
         else:
-            new_state[row, col, player] = 1
+            value_data[i] = value_data[i-1] # for i=0, last element equals first
 
-        if  i < 20:
-            print(f"Player {player}")
-            print(f"State: {state_data[i]}")
-            print(f"Policy: {policy_data[i]}")
-    print(f"Value: {value_data}")
+        # No need to update next state on last move
+        if i == num_moves - 1:
+            break
+
+        # Make the move that was made and update the next state
+        state_data[i+1] = state_data[i]
+        if is_token:
+            state_data[i+1][tile, 0] = 1
+        else:
+            row, col = tile // dim, tile % dim
+            state_data[i+1][0, row, col] = 1
+
+        prev_player = player
+
+        # if  i < 100:
+        #     print(f"Player {player}")
+        #     print(f"State: {state_data[i]}")
+        #     print(f"Policy: {policy_data[i]}")
+    # print(f"Value: {value_data}")
 
     data = TensorDict(
         {
@@ -289,6 +335,61 @@ def train(step, context):
         wandb.log({"policy_loss": policy_loss, "value_loss": value_loss}, step=step)
 
 
+def start_workers(config, ipc, task):
+
+    processes = []
+    for i in range(config.workers):
+        p = mp.Process(target=task, args=(i, config, ipc.request_queue, ipc.pipes_from_model[i]))
+        p.start()
+        processes.append(p)
+
+    return processes
+
+
+def generate_self_play_data(config, context):
+
+    # Spawn asynchronous self-play processes
+    num_tasks = config.games_per_round()
+    ipc = IPC(config.workers)
+
+    processes = start_workers(config, ipc, play_training_game)
+
+    # Start handling inference requests
+    game_data = []
+    handle_inference_requests(config, context, ipc, game_data)
+    
+    # Optionally wait for all to finish
+    for p in processes:
+        p.join()
+
+    # Save the game data to the replay buffer
+    for game in game_data:
+        save(game, context.buffer, config)
+
+
+def evaluate_against_random(config, context, step):
+
+    # Spawn async self-play processs to test
+    num_tasks = config.eval_games
+    request_queue, pipes_from_model, pipes_to_workers = set_up_workers(config, num_tasks)
+
+    with mp.get_context("spawn").Pool(config.workers) as pool:
+        game_data = pool.starmap_async(
+            play_test_against_random,
+            [(id, config, request_queue, pipes_from_model[id]) for id in range(num_tasks)]
+        )
+
+        # Start handling inference requests
+        handle_inference_requests(config, context, request_queue, pipes_to_workers, game_data)
+
+        # Save eval stats
+        wins = sum(game_data.get())
+        average = wins / config.eval_games
+        logging.info(f"Score = {average}")
+        if not context.testing:
+            wandb.log({"win_ratio": average}, step=step)
+
+
 def main():
     """Train the model
 
@@ -298,33 +399,35 @@ def main():
     reaches a certain number of training steps.
     """
 
-    # Parse args for number of CPUs and testing mode
+    # Parse args for number of workerss and testing mode
     parser = argparse.ArgumentParser(description="Training the Blokus Deep Neural Network with Self-Play")
     parser.add_argument('--test', action='store_true', help="Run the program in testing mode")
     parser.add_argument('--dim', type=int, default=20, help="Dimension of game board (default: 20)")
-    parser.add_argument('--workers', type=int, default=1, help="Number of CPUs to use (default: 1)")
+    parser.add_argument('--workers', type=int, default=1, help="Number of workers to use (default: 1)")
     parser.add_argument('--load', type=str, help="Path to load starting model")
     parser.add_argument('--save', type=str, help="Path to save model to")
     args = parser.parse_args()
-    logging.info(f"Using {args.workers} CPUs")
+    logging.info(f"Using {args.workers} workerss")
     logging.info(f"Running in {'test' if args.test else 'full power'} mode")
 
     save_path = f"{MODEL_PATH}/{args.save}" if args.save else f"{MODEL_PATH}/latest_model.pt"
-    if args.load: logging.info(f"Loading model from {args.load}")
+    if args.load: 
+        logging.info(f"Loading model from {args.load}")
     if args.save:
         logging.info(f"Keeping track of model checkpoints @ {save_path}")
 
-    # Load environment variables
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        device = 'cuda'
+    elif torch.backends.mps.is_available():
+        device = 'mps'
+    else:
+        device = 'cpu'
     logging.info(f"Using device: {device}")
 
-    # FOR NOW DURING DEVELOPMENT
-    args.test = True
     if args.test:
         config = TestConfig(args.dim, args.workers)
     else:
         config = Config(args.dim, args.workers)
-
 
     # Create the model, optimizer, and loss
     if config.rep == CHANNEL:
@@ -359,40 +462,15 @@ def main():
     global_step = 0
     for round in trange(config.training_rounds):
 
-        # Create the queues and pipes
-        manager = mp.Manager()
-        request_queue = manager.Queue(maxsize=config.workers * config.games_per_worker)
-        pipes_to_model = []
-        pipes_to_workers = []
-        for i in range(config.games_per_round()):
-            a, b = mp.Pipe()
-            pipes_to_model.append(a)
-            pipes_to_workers.append(b)
-
-        # Generate spawn asynchronous self-play processes
-        with mp.get_context("spawn").Pool(config.workers) as pool:
-            game_data = pool.starmap_async(
-                play_training_game,
-                [(id, config, request_queue, pipes_to_model[id]) for id in range(config.games_per_round())]
-            )
-
-            # Start handling inference requests
-            total_requests_ish = config.requests_per_round()
-            pbar = tqdm(total=total_requests_ish, desc=f"Self-Play Requests Round {round}")
-            while not game_data.ready():
-                num_requests = handle_inference_batch(config, context, request_queue, pipes_to_workers)
-                pbar.update(num_requests)
-            pbar.close()
-
-            # Save the game data to the replay buffer
-            for game in game_data.get():
-                save(game, buffer, config)
+        generate_self_play_data(config, context)
 
         # Train the model
         for step in trange(config.training_steps, desc=f"Training round {round}", leave=False):
             train(global_step, context)
             global_step += 1
         torch.save(model.state_dict(), save_path)
+
+        evaluate_against_random(config, context, global_step)
 
     # Clean up
     logging.info("Training complete")

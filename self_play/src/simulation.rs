@@ -22,8 +22,9 @@ pub struct Config {
 }
 
 pub struct Runtime<'py> {
-    pub config:     Config,
-    pub id:         i32,
+    pub config:         Config,
+    pub id:             i32,
+    pub result_queue:   &'py Bound<'py, PyAny>,
     pub queue:          &'py Bound<'py, PyAny>,
     pub pipe:           &'py Bound<'py, PyAny>
 }
@@ -243,23 +244,27 @@ impl<'py> Runtime<'py> {
 
     /// Run MCTS simulations to get policy for root node
     fn mcts(&self,
+        root: &mut Node,
         game: &Game,
         policies: &mut Vec<Vec<(i32, f32)>>,
     ) -> Result<usize, String> {
+
         // Initialize root for these sims, evaluate it, and add children
-        let mut root = Node::new(0.0);
-        match self.evaluate(&mut root, game) {
-            Ok(_) => (),
-            Err(e) => {
-                return Err(format!("Error evaluating root node: {:}", e));
+        if !root.is_expanded() {
+            match self.evaluate(root, game) {
+                Ok(_) => (),
+                Err(e) => {
+                    return Err(format!("Error evaluating root node: {:}", e));
+                }
             }
         }
-        self.add_exploration_noise(&mut root);
+
+        // As far as I can tell, noise is added for each root node
+        self.add_exploration_noise(root);
 
         for _ in 0..self.config.sims_per_move {
             // Select a leaf node
-            root.visits += 1;
-            let mut node = &mut root;
+            let mut node = &mut *root;
             let mut scratch_game = game.clone();
             let mut search_path = Vec::new();
             while node.is_expanded() {
@@ -273,7 +278,7 @@ impl<'py> Runtime<'py> {
             let values = self.evaluate(node, &scratch_game).unwrap();
 
             // Backpropagate the value
-            backpropagate(search_path, &mut root, values)
+            backpropagate(search_path, root, values)
         }
 
         // Save policy for this state
@@ -297,33 +302,38 @@ impl<'py> Runtime<'py> {
         Ok(action)
     }
 
-    pub fn training_game(&self) -> Result<(Vec<(i32, i32)>, Vec<Vec<(i32, f32)>>, Vec<f32>), String> {
+    pub fn training_game(&self) -> u8 {
         // Storage for game data
         let mut game = Game::reset(self.config.dim);
         let mut policies: Vec<Vec<(i32, f32)>> = Vec::new();
+        let mut root_node = Node::new(0.0);
+        let mut root = &mut root_node;
+
 
         // Run self-play to generate data
         while !game.is_terminal() {
             // Get MCTS policy for current state
-            let action = match self.mcts(&game, &mut policies) {
+            let action = match self.mcts(root, &game, &mut policies) {
                 Ok(a) => a,
-                Err(e) => {
-                    return Err(format!("Error running MCTS: {}", e));
+                Err(_e) => {
+                    return 1;
                 }
             };
 
             // println!("Player {} --- {}", game.current_player(), action);
             let _ = game.apply(action, None);
+            root = root.children.get_mut(&action).unwrap();
         }
 
         // Send data to train the model
         // println!("History: {:?}", game.history);
         let values = game.get_payoff();
         let game_data = (game.history, policies, values.clone());
-        Ok(game_data)
+        let _ = self.result_queue.call_method1("put", (game_data,));
+        0
     }
 
-    pub fn test_against_random(&self) -> Result<f32, String> {
+    pub fn test_against_random(&self) -> u8 {
         let mut game = Game::reset(self.config.dim); 
         let mut action;
         while !game.is_terminal() {
@@ -340,7 +350,7 @@ impl<'py> Runtime<'py> {
                 Ok(a) => a,
                 Err(e) => {
                     println!("Error running MCTS: {:?}", e);
-                    return Err("Error running MCTS".to_string());
+                    return 1;
                 }
             };
 
@@ -349,7 +359,8 @@ impl<'py> Runtime<'py> {
         }
         println!("Finished Game");
         game.board.print_board();
-        Ok(game.get_payoff()[0])
+        let _ = self.result_queue.call_method1("put", (game.get_payoff()[0],));
+        0
     }
 
     pub fn test_game(&mut self, model_queue: &'py Bound<PyAny>, baseline_queue: &'py Bound<PyAny>) -> Result<f32, String> {

@@ -20,8 +20,6 @@ from resnet import ResNet
 from training import TestConfig, handle_inference_batch
 from blokus_self_play import play_test_game
 
-DIM = 20
-
 
 def main():
     """Run a model against another in multiple rounds of self-play testing
@@ -50,10 +48,6 @@ def main():
     baseline.load_state_dict(torch.load(second_model_path, weights_only=True, map_location=device))
     baseline.to(device)
     baseline.eval()
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
-    policy_loss = torch.nn.CrossEntropyLoss().to(device)
-    value_loss = torch.nn.MSELoss().to(device)
 
     # Create the queues and pipes
     manager = mp.Manager()

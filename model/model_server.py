@@ -57,7 +57,7 @@ async def process_tensor(request: TensorData):
     return result
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
 
     path = sys.argv[1]
     model.load_state_dict(torch.load(path, weights_only=True, map_location=device))

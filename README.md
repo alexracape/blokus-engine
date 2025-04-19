@@ -2,6 +2,9 @@
 
 ![blokus_ai](https://github.com/user-attachments/assets/b0e97f83-328a-4218-b4cf-80c7819ab331)
 
+Checkout the hosted GUI [here](https://alexracape.github.io/blokus-engine/)
+
+
 ## Project Outline
 
 This repository contains several main sections. Most of the code is train a neural network using self-play and
@@ -53,6 +56,10 @@ To open the GUI in the browser run the model server and the proxy server then ru
 `trunk serve --open`
 
 ### Training
+
+To train locally, run:
+
+`python model/training.py --test --workers 1 --dim 20 --load <model_path> --save <new_path>`
 
 To run a job on the HPC using 32 CPU cores, 240GB of memory, and an RTX2080 card, you can do:
 

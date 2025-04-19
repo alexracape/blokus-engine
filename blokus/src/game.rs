@@ -1,11 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 
-use crate::board::Board;
+use crate::board::{Board, RepType};
 use crate::pieces::{Piece, PieceVariant};
 
-const D: usize = 20;
-const BOARD_SPACES: usize = 400;
 const NUM_PLAYERS: usize = 4;
 
 /// Get the legal moves for a piece
@@ -74,19 +72,21 @@ fn get_tile_moves(board: &Board, player: usize) -> HashMap<usize, HashSet<(usize
 }
 
 /// Rotates the tensor of boards 90 degrees to the left
-fn rotate_state(state: [[[bool; D]; D]; NUM_PLAYERS + 1]) -> [[[bool; D]; D]; NUM_PLAYERS + 1] {
-    let mut new_state = state.clone();
-    for i in 0..NUM_PLAYERS + 1 {
-        // Row
-        for j in 0..D {
-            for k in 0..D {
-                new_state[i][j][k] = state[i][k][D - j - 1];
-            }
-        }
-    }
+// fn rotate_state(state: &Vec<Vec<Vec<bool>>>) -> Vec<Vec<Vec<bool>>> {
+//     let dim = state[0].len();
+//     let num_layers = state.len();
 
-    new_state
-}
+//     let mut new_state = vec![vec![vec![false; dim]; dim]; num_layers];
+//     for i in 0..num_layers {
+//         for j in 0..dim {
+//             for k in 0..dim {
+//                 new_state[i][j][k] = state[i][k][dim - j - 1];
+//             }
+//         }
+//     }
+
+//     new_state
+// }
 
 #[derive(Clone)]
 pub struct Game {
@@ -99,16 +99,16 @@ pub struct Game {
 }
 
 impl Game {
-    pub fn reset() -> Self {
-        let board = Board::new();
+    pub fn reset(dim: usize) -> Self {
+        let board = Board::new(dim);
         let legal_tiles = get_tile_moves(&board, 0);
 
         Game {
-            board: board,
+            board,
             history: Vec::new(),
             eliminated: [false; NUM_PLAYERS],
             current_player: 0,
-            legal_tiles: legal_tiles,
+            legal_tiles,
             last_piece_lens: [0; NUM_PLAYERS],
         }
     }
@@ -191,10 +191,6 @@ impl Game {
         }
 
         Ok(())
-    }
-
-    pub fn get_board(&self) -> &[u8; BOARD_SPACES] {
-        &self.board.board
     }
 
     /// Cycle to the next player
@@ -280,33 +276,42 @@ impl Game {
         !self.eliminated[player]
     }
 
-    pub fn get_board_state(&self) -> [[[bool; D]; D]; 5] {
-        let mut board_state = [[[false; D]; D]; 5];
-        let board = self.board.board;
-        for i in 0..BOARD_SPACES {
-            let player = (board[i] & 0b1111) as usize; // check if there is a player piece
-            if player != 0 {
-                // Player here is 1 indexed because 0 is empty
-                let player_board = (4 + (player - 1) - self.current_player) % 4; // orient to current player (0 indexed)
-                let row = i / D;
-                let col = i % D;
-                board_state[player_board][row][col] = true;
+    pub fn get_board_state(&self) -> Vec<Vec<Vec<bool>>> {
+        self.board.get_rep(RepType::Channel, 0)
+    }
+
+    pub fn get_game_state(&self, format: RepType) -> Vec<Vec<Vec<bool>>> {
+        let mut board_rep = self.board.get_rep(format.clone(), self.current_player);
+        let dim = self.board.get_dim();
+        let legal_moves = self.get_legal_tiles();
+
+        // Get rep for the legal spaces
+        match format {
+            RepType::Channel => {
+                let mut legal_move_rep = vec![vec![false; dim]; dim];
+                for tile in legal_moves {
+                    let row = tile / dim;
+                    let col = tile % dim;
+                    legal_move_rep[row][col] = true;
+                }
+                board_rep.push(legal_move_rep);
+            },
+            RepType::Token => {
+                for row in 0..dim {
+                    for col in 0..dim {
+                        let tile = row * dim + col;
+                        board_rep[row][col].push(legal_moves.contains(&tile));
+                    }
+                }
             }
         }
 
-        // Get rep for the legal spaces
-        let legal_moves = self.get_legal_tiles();
-        for tile in legal_moves {
-            let row = tile / D;
-            let col = tile % D;
-            board_state[4][row][col] = true;
-        }
-
         // Rotate the board to the current player perspective
-        for _ in 0..self.current_player {
-            board_state = rotate_state(board_state);
-        }
+        // Comment out for now for simplicity
+        // for _ in 0..self.current_player {
+        //     board_rep = rotate_state(board_rep);
+        // }
 
-        board_state
+        board_rep
     }
 }

@@ -9,14 +9,16 @@ use yew::prelude::*;
 use crate::board::BlokusBoard;
 use crate::pieces::PieceTray;
 use blokus::game::Game;
+use blokus::board::RepType;
 
 const SERVER_ADDRESS: &str = "http://127.0.0.1:8000/process_request";
 const D: usize = 20;
+const BOARD_SIZE: usize = 400;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct GameStateRequest {
     player: usize,
-    data: [[[bool; D]; D]; 5],
+    data: Vec<Vec<Vec<bool>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -26,7 +28,7 @@ struct GameStateResponse {
     status: i32,
 }
 
-fn print_rep(rep: [[[bool; D]; D]; 5]) {
+fn print_rep(rep: &Vec<Vec<Vec<bool>>>) {
     let mut str_rep = String::new();
     for i in 0..5 {
         for j in 0..D {
@@ -47,15 +49,28 @@ fn print_rep(rep: [[[bool; D]; D]; 5]) {
 fn get_state_rep(game: &Game) -> GameStateRequest {
     GameStateRequest {
         player: game.current_player(),
-        data: game.get_board_state(),
+        data: game.get_game_state(RepType::Token),
     }
 }
 
-/// Takes state and returns tile to place
-async fn get_ai_move(state: &Game) -> Result<usize, String> {
+/// Rotates the policy 90 degrees to the right
+fn rotate_policy(state: Vec<f32>) -> Vec<f32> {
+    let mut rotated = vec![0.0; BOARD_SIZE];
+    for i in 0..D {
+        for j in 0..D {
+            rotated[j * D + (D - 1 - i)] = state[i * D + j];
+        }
+    }
+
+    rotated.to_vec()
+}
+
+/// Query the model server
+async fn query_model(state: &Game) -> Result<GameStateResponse, String> {
     let request = get_state_rep(state);
-    print_rep(request.data);
+    print_rep(&request.data);
     let serialized_request = serde_json::to_string(&request).unwrap();
+    let current_player = state.current_player();
 
     // Send POST request to FastAPI server
     match Request::post(SERVER_ADDRESS)
@@ -66,33 +81,35 @@ async fn get_ai_move(state: &Game) -> Result<usize, String> {
     {
         Ok(response) => {
             let json_value = response.json().await.unwrap();
-            let response: GameStateResponse = serde_json::from_value(json_value).unwrap();
+            let mut response: GameStateResponse = serde_json::from_value(json_value).unwrap();
             if response.status != 200 {
                 console::error!("AI failed to find a move");
+                return Err("Failed to query the model".to_string());
             }
-            let tile = response
-                .policy
-                .iter()
-                .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                .map(|(i, _)| i)
-                .expect("No policy found");
 
-            // Return tile to right perspective
-            let row = tile / D;
-            let col = tile % D;
-            let (new_row, new_col) = match state.current_player() {
-                0 => (row, col),
-                1 => (col, D - row - 1),
-                2 => (D - row - 1, D - col - 1),
-                3 => (D - col - 1, row),
-                _ => panic!("Invalid player number"),
-            };
-
-            Ok(new_row * D + new_col)
+            // Reorient
+            for _ in 0..(current_player) {
+                response.policy = rotate_policy(response.policy);
+            }
+            response.values.rotate_right(current_player);
+            Ok(response)
         }
         Err(e) => Err(format!("Failed to get AI move: {:?}", e)),
     }
+}
+
+/// Takes state and returns tile to place
+async fn get_ai_move(state: &Game) -> Result<usize, String> {
+    let response = query_model(state).await.unwrap();
+    let tile = response
+        .policy
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .map(|(i, _)| i)
+        .expect("No policy found");
+
+    Ok(tile)
 }
 
 /// Applies AI moves to state after player has gone
@@ -142,10 +159,27 @@ fn alert_game_over(game: &Game) {
 
 #[function_component]
 pub fn App() -> Html {
-    let state = use_state(|| Game::reset());
+    let state = use_state(|| Game::reset(D));
+    let show_eval = use_state(|| false);
+    let show_policy = use_state(|| false);
+    let policy = use_state(|| vec![0.0; 400]);
+    let scores = use_state(|| vec![0.25; 4]);
+
+    // let policy_state = policy.clone();
+    // let scores_state = scores.clone();
+    // let copy = state.clone();
+    // spawn_local({
+    //     async move {
+    //         let response = query_model(&copy).await.unwrap();
+    //         policy_state.set(response.policy);
+    //         scores_state.set(response.values);
+    //     }
+    // });
 
     let on_board_drop = {
         let state = state.clone();
+        let policy = policy.clone();
+        let scores = scores.clone();
         Callback::from(move |(p, v, offset)| {
             // Don't do anything if game is over
             if state.is_terminal() {
@@ -171,6 +205,8 @@ pub fn App() -> Html {
 
             // Handle AI moves
             let state = state.clone();
+            let policy_state = policy.clone();
+            let scores_state = scores.clone();
             spawn_local({
                 async move {
                     let new_state = handle_ai_moves(game.clone()).await;
@@ -178,6 +214,11 @@ pub fn App() -> Html {
                     if new_state.is_terminal() {
                         alert_game_over(&game);
                     }
+
+                    // Get Policy and Eval
+                    let response = query_model(&new_state).await.unwrap();
+                    policy_state.set(response.policy);
+                    scores_state.set(response.values);
                 }
             });
         })
@@ -185,7 +226,17 @@ pub fn App() -> Html {
 
     let on_reset = {
         let state = state.clone();
-        Callback::from(move |_| state.set(Game::reset()))
+        Callback::from(move |_| state.set(Game::reset(D)))
+    };
+
+    let toggle_eval = {
+        let show_eval = show_eval.clone();
+        Callback::from(move |_| show_eval.set(!*show_eval))
+    };
+
+    let toggle_policy = {
+        let show_policy = show_policy.clone();
+        Callback::from(move |_| show_policy.set(!*show_policy))
     };
 
     html! {
@@ -206,10 +257,24 @@ pub fn App() -> Html {
                         <div class={format!("square green {}", if !state.is_player_active(2) { "eliminated" } else { "" })}></div>
                         <div class={format!("square yellow {}", if !state.is_player_active(3) { "eliminated" } else { "" })}></div>
                     </div>
+                    { if *show_eval { html! {
+                        <div>
+                            <h2>{ "Eval Bar" }</h2>
+                            <div class="eval">
+                                <div class="eval-section red" style={format!("width: {}%", 100.0 * scores[0])}></div>
+                                <div class="eval-section blue" style={format!("width: {}%", 100.0 * scores[1])}></div>
+                                <div class="eval-section green" style={format!("width: {}%", 100.0 * scores[2])}></div>
+                                <div class="eval-section yellow" style={format!("width: {}%", 100.0 * scores[3])}></div>
+                            </div>
+                        </div>
+                    }} else {
+                        html!{}
+                    }}
+
                 </div>
 
                 <div class="main-board">
-                    <BlokusBoard board={state.get_board()} on_board_drop={on_board_drop} anchors={state.get_current_anchors()} />
+                    <BlokusBoard board={state.get_board_state()} policy={(*policy).clone()} show_policy={*show_policy} on_board_drop={on_board_drop} anchors={state.get_current_anchors()} />
                 </div>
 
                 <div class="side-panel">
@@ -220,6 +285,14 @@ pub fn App() -> Html {
                         Rotate Piece: r\n
                         Flip Piece: f\n
                     "}</p>
+                    <label>
+                        <input type="checkbox" checked={*show_eval} onclick={toggle_eval}/>
+                        { "Show Eval Bar" }
+                    </label>
+                    <label>
+                        <input type="checkbox" checked={*show_policy} onclick={toggle_policy}/>
+                        { "Show AI Heat Map" }
+                    </label>
                     <button onclick={on_reset}>{ "Reset Game" }</button>
                 </div>
 

@@ -1,7 +1,6 @@
 /*
 Defines Pieces for Blokus Game
 */
-use crate::board::BOARD_SIZE;
 
 pub enum PieceType {
     One,
@@ -63,7 +62,7 @@ pub struct PieceVariant {
 }
 
 impl PieceVariant {
-    pub fn new(shape: Vec<Vec<bool>>) -> PieceVariant {
+    pub fn new(shape: Vec<Vec<bool>>, dim:usize) -> PieceVariant {
         let mut offsets = Vec::new();
         let mut variant = Vec::new();
         
@@ -78,7 +77,7 @@ impl PieceVariant {
                 continue;
             }
 
-            for _ in 0..BOARD_SIZE - row.len() {
+            for _ in 0..dim - row.len() {
                 variant.push(false);
             }
         }
@@ -90,10 +89,10 @@ impl PieceVariant {
             }
         }
         PieceVariant {
-            offsets: offsets,
-            variant: variant,
+            offsets,
+            variant,
             width: shape[0].len(),
-            shape: shape,
+            shape,
         }
     }
 
@@ -121,7 +120,7 @@ impl Piece {
 
     /// Takes a PieceType and redirects to the correct constructor
     /// Those constructors define the shape and create variant shapes
-    pub fn new(piece_type: PieceType) -> Piece {
+    pub fn new(piece_type: PieceType, dim: usize) -> Piece {
         let shape = match piece_type {
             PieceType::One => vec![vec![true]],
             PieceType::Two => vec![vec![true, true]],
@@ -151,7 +150,7 @@ impl Piece {
             id: id,
             shape: shape.clone(),
             points: shape.iter().flatten().filter(|&x| *x).count() as u32,
-            variants: Piece::gen_variants(shape.clone()),
+            variants: Piece::gen_variants(shape.clone(), dim),
         }
     }
 
@@ -182,14 +181,14 @@ impl Piece {
         new_shape
     }
 
-    fn gen_variants(shape: Vec<Vec<bool>>) -> Vec<PieceVariant> {
+    fn gen_variants(shape: Vec<Vec<bool>>, dim: usize) -> Vec<PieceVariant> {
         let mut variants = Vec::new();
         let mut variant_shape = shape.clone();
 
         // Generate all 8 variants
         for _ in 0..4 {
 
-            let new_variant = PieceVariant::new(variant_shape.clone());
+            let new_variant = PieceVariant::new(variant_shape.clone(), dim);
             if !variants.contains(&new_variant) {
                 variants.push(new_variant);
             }
@@ -198,7 +197,7 @@ impl Piece {
         variant_shape = Piece::flip(shape);
         for _ in 0..4 {
 
-            let new_variant = PieceVariant::new(variant_shape.clone());
+            let new_variant = PieceVariant::new(variant_shape.clone(), dim);
             if !variants.contains(&new_variant) {
                 variants.push(new_variant);
             }
@@ -223,43 +222,46 @@ mod tests {
 
     #[test]
     fn test_piece_creation() {
-        let piece = Piece::new(PieceType::One);
+        let dim = 20;
+        let piece = Piece::new(PieceType::One, dim);
         assert_eq!(piece.points, 1);
-        assert_eq!(piece.variants, Piece::gen_variants(vec![vec![true]]));
+        assert_eq!(piece.variants, Piece::gen_variants(vec![vec![true]], dim));
 
-        let piece = Piece::new(PieceType::Two);
+        let piece = Piece::new(PieceType::Two, dim);
         assert_eq!(piece.points, 2);
-        assert_eq!(piece.variants, Piece::gen_variants(vec![vec![true, true]]));
+        assert_eq!(piece.variants, Piece::gen_variants(vec![vec![true, true]], dim));
 
-        let piece = Piece::new(PieceType::Right);
+        let piece = Piece::new(PieceType::Right, dim);
         assert_eq!(piece.points, 3);
         assert_eq!(piece.variants.len(), 4);
 
-        let piece = Piece::new(PieceType::Crazy);
+        let piece = Piece::new(PieceType::Crazy, dim);
         assert_eq!(piece.points, 5);
         assert_eq!(piece.variants.len(), 8);
     }
 
     #[test]
     fn test_get_shape() {
-        let variant = PieceVariant::new(vec![vec![true, true]]);
+        let dim = 20;
+        let variant = PieceVariant::new(vec![vec![true, true]], dim);
         assert_eq!(variant.get_shape(), vec![vec![true, true]]);
 
-        let variant = PieceVariant::new(vec![vec![true, true], vec![true, false]]);
+        let variant = PieceVariant::new(vec![vec![true, true], vec![true, false]], dim);
         assert_eq!(variant.get_shape(), vec![vec![true, true], vec![true, false]]);
     }
 
     #[test]
     fn test_variant_creation() {
-        let variant = PieceVariant::new(vec![vec![true]]);
+        let dim = 20;
+        let variant = PieceVariant::new(vec![vec![true]], dim);
         assert_eq!(variant.variant, vec![true]);
         assert_eq!(variant.variant.len(), 1);
         assert_eq!(variant.offsets, vec![0]);
         assert_eq!(variant.width, 1);
 
-        let variant = PieceVariant::new(vec![vec![true], vec![true]]);
-        assert_eq!(variant.variant.len(), BOARD_SIZE + 1);
-        assert_eq!(variant.offsets, vec![0, BOARD_SIZE]);
+        let variant = PieceVariant::new(vec![vec![true], vec![true]], dim);
+        assert_eq!(variant.variant.len(), dim + 1);
+        assert_eq!(variant.offsets, vec![0, dim]);
         assert_eq!(variant.width, 1);
     }
 
@@ -287,16 +289,17 @@ mod tests {
 
     #[test]
     fn test_piece_variants() {
+        let dim = 20;
         let shape = vec![vec![true, true]];
-        let variants = Piece::gen_variants(shape.clone());
+        let variants = Piece::gen_variants(shape.clone(), dim);
         assert_eq!(variants.len(), 2);
 
         let shape = vec![vec![true, true], vec![true, false]];
-        let variants = Piece::gen_variants(shape.clone());
+        let variants = Piece::gen_variants(shape.clone(), dim);
         assert_eq!(variants.len(), 4);
 
         let shape = vec![vec![true, true, true], vec![true, false, false]];
-        let variants = Piece::gen_variants(shape.clone());
+        let variants = Piece::gen_variants(shape.clone(), dim);
         assert_eq!(variants.len(), 8);
     }
 }

@@ -2,9 +2,6 @@ import torch
 import torch.nn as nn
 
 
-DIM = 20
-
-
 class ResidualBlock(nn.Module):
 
     def __init__(self, in_channels, out_channels):
@@ -41,15 +38,16 @@ class ResNet(nn.Module):
     outcome of the game for each player. The value is between 0 and 1.
     """
 
-    def __init__(self, blocks, width, custom_filters=False):
+    def __init__(self, depth, width, dim):
         super(ResNet, self).__init__()
-        self.blocks = blocks
+        self.dim = dim
+        self.max_dim = 20
+        self.blocks = depth
         self.width = width
-        self.custom_filters = custom_filters
         self.piece_filters = []
 
         self.input = nn.Conv2d(5, width, kernel_size=3, padding=1)
-        self.res_blocks = nn.ModuleList([ResidualBlock(width, width) for _ in range(blocks)])
+        self.res_blocks = nn.ModuleList([ResidualBlock(width, width) for _ in range(depth)])
         self.policy_head = nn.Sequential(
             nn.Conv2d(width, 1, kernel_size=1),
             nn.BatchNorm2d(1),
@@ -61,12 +59,12 @@ class ResNet(nn.Module):
             nn.BatchNorm2d(1),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(DIM * DIM, 4),
+            nn.Linear(self.max_dim * self.max_dim, 4),
             nn.Tanh(),
         )
 
 
-    def forward(self, boards):
+    def forward(self, boards, training=False):
         """Get the policy and value for the given board state
 
         For now, the board is represented by a 20x20x5 tensor where the first 4 channels are
@@ -83,9 +81,11 @@ class ResNet(nn.Module):
         # Policy head - mask out illegal moves so they are 0 in policy
         policy = self.policy_head(x)
         mask = boards[:, 4, :, :].view(boards.size(0), -1)
-        policy_masked = policy * mask
-        policy_softmax = torch.softmax(policy_masked + (1 - mask) * -1e9, dim=1)
-        policy = policy_softmax * mask
+        policy_masked = policy + (1 - mask) * -1e9
+        if training:
+            policy = policy_masked  # Cross Entropy Loss handles softmax
+        else:
+            policy = torch.softmax(policy_masked, dim=1)
 
         # Value head
         value = self.value_head(x)

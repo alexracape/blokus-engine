@@ -45,6 +45,7 @@ class IPC:
     def __init__(self, num_workers):
         self.manager = mp.Manager()
         self.request_queue = self.manager.Queue()
+        self.result_queue = self.manager.Queue()
         self.pipes_from_model = []
         self.pipes_to_workers = []
         for i in range(num_workers):
@@ -70,11 +71,13 @@ class Config:
         exploration_fraction = 0.25
     """
 
-    def __init__(self, dim=20, num_workers=1):
+    def __init__(self, dim=20, num_workers=25):
         self.dim = dim
+        self.workers = num_workers
+        self.games_per_worker = 4
+        self.eval_games_per_worker = 4
         self.rep = TOKEN
         self.training_rounds = 10
-        self.eval_games = 100
         self.transformer = {
             "d_max": 20,
             "embed_dim": 128,
@@ -94,8 +97,6 @@ class Config:
         self.weight_decay = 1e-4
         self.batch_size = 256
         self.training_steps = 1000
-        self.workers = num_workers
-        self.games_per_worker = 4
 
         self.sims_per_move = 100
         self.sample_moves = 30
@@ -117,11 +118,13 @@ class Config:
 class TestConfig(Config):
     """Configuration with testing values to speed things up"""
 
-    def __init__(self, dim=20, num_workers=1):
+    def __init__(self, dim=20, num_workers=4):
         self.dim = dim
+        self.workers = num_workers
+        self.games_per_worker = 4
+        self.eval_games_per_worker = 4
         self.rep = TOKEN
         self.training_rounds = 2
-        self.eval_games = 10
         self.transformer = {
             "d_max": 20,
             "embed_dim": 16,
@@ -141,8 +144,6 @@ class TestConfig(Config):
         self.weight_decay = 1e-4
         self.batch_size = 64
         self.training_steps = 10
-        self.workers = num_workers
-        self.games_per_worker = 4
 
         self.sims_per_move = 5
         self.sample_moves = 30
@@ -172,11 +173,11 @@ def handle_inference_batch(config, context, ipc):
     """
 
     time.sleep(.0001)
-    ids, requests = empty_queue(ipc.inference_queue)
+    ids, requests = empty_queue(ipc.request_queue)
     if config.rep == CHANNEL:
-        batch = torch.tensor(requests, dtype=torch.float32).view(-1, 5, config.dim, config.gdim).to(config.device)
+        batch = torch.tensor(requests, dtype=torch.float32).view(-1, 5, config.dim, config.gdim).to(context.device)
     else:
-        batch = torch.tensor(requests, dtype=torch.float32).view(-1, config.dim * config.dim, 5).to(config.device)
+        batch = torch.tensor(requests, dtype=torch.float32).view(-1, config.dim * config.dim, 5).to(context.device)
 
 
     num_requests = len(ids)
@@ -195,22 +196,21 @@ def handle_inference_batch(config, context, ipc):
     return num_requests
 
 
-def handle_result_batch(ipc):
-    # TODO
-    return
+def handle_result_batch(ipc, data):
+    ids, requests = empty_queue(ipc.result_queue)
+    data.extend(requests)
 
 
-def handle_inference_requests(config, context, ipc, data):
-    total_requests_ish = config.requests_per_round()
-    pbar = tqdm(total=total_requests_ish, desc=f"Self-Play Requests")
-    while len(data) != config.num_workers:
+def handle_inference_requests(config, context, ipc):
+    results = []
+    while len(results) != config.workers:
         # Handle requests
         num_requests = handle_inference_batch(config, context, ipc)
-        pbar.update(num_requests)
 
         # Check for results
+        handle_result_batch(ipc, results)
 
-    pbar.close()
+    return results
 
 
 def save(game, buffer: ReplayBuffer, config: Config):
@@ -339,7 +339,7 @@ def start_workers(config, ipc, task):
 
     processes = []
     for i in range(config.workers):
-        p = mp.Process(target=task, args=(i, config, ipc.request_queue, ipc.pipes_from_model[i]))
+        p = mp.Process(target=task, args=(i, config, ipc.result_queue, ipc.request_queue, ipc.pipes_from_model[i]))
         p.start()
         processes.append(p)
 
@@ -349,20 +349,21 @@ def start_workers(config, ipc, task):
 def generate_self_play_data(config, context):
 
     # Spawn asynchronous self-play processes
-    num_tasks = config.games_per_round()
+    pbar = tqdm(total=config.games_per_worker * config.workers, desc=f"Self-Play Games")
     ipc = IPC(config.workers)
-
-    processes = start_workers(config, ipc, play_training_game)
-
-    # Start handling inference requests
     game_data = []
-    handle_inference_requests(config, context, ipc, game_data)
-    
-    # Optionally wait for all to finish
-    for p in processes:
-        p.join()
+    for i in range(config.games_per_worker):
+        processes = start_workers(config, ipc, play_training_game)
+
+        # Handling inference requests
+        results = handle_inference_requests(config, context, ipc)
+        game_data.extend(results)
+        pbar.update(len(game_data))
+        for p in processes:
+            p.join()
 
     # Save the game data to the replay buffer
+    pbar.close()
     for game in game_data:
         save(game, context.buffer, config)
 
@@ -370,24 +371,26 @@ def generate_self_play_data(config, context):
 def evaluate_against_random(config, context, step):
 
     # Spawn async self-play processs to test
-    num_tasks = config.eval_games
-    request_queue, pipes_from_model, pipes_to_workers = set_up_workers(config, num_tasks)
+    pbar = tqdm(total=config.eval_games_per_worker * config.workers, desc=f"Eval Games")
+    ipc = IPC(config.workers)
+    game_data = []
+    for i in range(config.eval_games_per_worker):
+        processes = start_workers(config, ipc, play_test_against_random)
 
-    with mp.get_context("spawn").Pool(config.workers) as pool:
-        game_data = pool.starmap_async(
-            play_test_against_random,
-            [(id, config, request_queue, pipes_from_model[id]) for id in range(num_tasks)]
-        )
+        # Handling inference requests
+        results = handle_inference_requests(config, context, ipc)
+        game_data.extend(results)
+        pbar.update(len(game_data))
+        for p in processes:
+            p.join()
 
-        # Start handling inference requests
-        handle_inference_requests(config, context, request_queue, pipes_to_workers, game_data)
-
-        # Save eval stats
-        wins = sum(game_data.get())
-        average = wins / config.eval_games
-        logging.info(f"Score = {average}")
-        if not context.testing:
-            wandb.log({"win_ratio": average}, step=step)
+    # Save eval stats
+    pbar.close()
+    wins = sum(game_data)
+    average = wins / (config.eval_games_per_worker * config.workers)
+    logging.info(f"Score = {average}")
+    if not context.testing:
+        wandb.log({"win_ratio": average}, step=step)
 
 
 def main():

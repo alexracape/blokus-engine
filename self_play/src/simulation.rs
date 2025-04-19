@@ -329,7 +329,7 @@ impl<'py> Runtime<'py> {
         // println!("History: {:?}", game.history);
         let values = game.get_payoff();
         let game_data = (game.history, policies, values.clone());
-        let _ = self.result_queue.call_method1("put", (game_data,));
+        let _ = self.result_queue.call_method1("put", ((self.id, game_data),));
         0
     }
 
@@ -357,9 +357,9 @@ impl<'py> Runtime<'py> {
             // println!("Player {} --- {}", game.current_player(), action);
             let _ = game.apply(tile, None);
         }
-        println!("Finished Game");
-        game.board.print_board();
-        let _ = self.result_queue.call_method1("put", (game.get_payoff()[0],));
+        // println!("Finished Game");
+        // game.board.print_board();
+        let _ = self.result_queue.call_method1("put", ((self.id, game.get_payoff()[0]),));
         0
     }
 

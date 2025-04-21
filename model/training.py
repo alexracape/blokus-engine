@@ -71,13 +71,13 @@ class Config:
         exploration_fraction = 0.25
     """
 
-    def __init__(self, dim=20, num_workers=25):
+    def __init__(self, dim=20, num_workers=32):
         self.dim = dim
         self.workers = num_workers
-        self.games_per_worker = 4
-        self.eval_games_per_worker = 4
+        self.games_per_worker = 10
+        self.eval_games_per_worker = 3
         self.rep = TOKEN
-        self.training_rounds = 10
+        self.training_rounds = 5
         self.transformer = {
             "d_max": 20,
             "embed_dim": 128,
@@ -95,14 +95,14 @@ class Config:
         self.buffer_capacity = 500000
         self.learning_rate = 0.01
         self.weight_decay = 1e-4
-        self.batch_size = 256
-        self.training_steps = 1000
+        self.batch_size = 512
+        self.training_steps = 4000
 
-        self.sims_per_move = 100
+        self.sims_per_move = 200
         self.sample_moves = 30
         self.c_base = 19652
         self.c_init = 1.25
-        self.dirichlet_alpha = 0.3
+        self.dirichlet_alpha = 0.03
         self.exploration_fraction = 0.25
 
     def to_dict(self):
@@ -414,8 +414,6 @@ def main():
     logging.info(f"Running in {'test' if args.test else 'full power'} mode")
 
     save_path = f"{MODEL_PATH}/{args.save}" if args.save else f"{MODEL_PATH}/latest_model.pt"
-    if args.load: 
-        logging.info(f"Loading model from {args.load}")
     if args.save:
         logging.info(f"Keeping track of model checkpoints @ {save_path}")
 
@@ -439,6 +437,7 @@ def main():
         model = BlokusTransformer(**config.transformer)
                  
     if args.load:
+        logging.info(f"Loading model from {args.load}")
         model.load_state_dict(torch.load(args.load, weights_only=True, map_location=device))
     model.to(device)
     model.train()

@@ -71,13 +71,13 @@ class Config:
         exploration_fraction = 0.25
     """
 
-    def __init__(self, dim=20, num_workers=32):
+    def __init__(self, dim=20, num_workers=50):
         self.dim = dim
         self.workers = num_workers
-        self.games_per_worker = 10
-        self.eval_games_per_worker = 3
+        self.games_per_worker = 2
+        self.eval_games_per_worker = 2
         self.rep = TOKEN
-        self.training_rounds = 5
+        self.training_rounds = 200
         self.transformer = {
             "d_max": 20,
             "embed_dim": 128,
@@ -92,17 +92,17 @@ class Config:
             "depth": 10
         }
 
-        self.buffer_capacity = 500000
         self.learning_rate = 0.01
         self.weight_decay = 1e-4
         self.batch_size = 512
-        self.training_steps = 4000
+        self.training_steps = 100
+        self.buffer_capacity = 50000
 
-        self.sims_per_move = 200
+        self.sims_per_move = 100
         self.sample_moves = 30
-        self.c_base = 19652
+        self.c_base = 305
         self.c_init = 1.25
-        self.dirichlet_alpha = 0.3
+        self.dirichlet_alpha = 0.03
         self.exploration_fraction = 0.25
 
     def to_dict(self):

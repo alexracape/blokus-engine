@@ -55,7 +55,7 @@ fn softmax_sample(visit_dist: Vec<(usize, u32)>) -> usize {
             return *tile;
         }
     }
-    visit_dist.last().unwrap().0
+    visit_dist.last().expect("Dist should not be empty").0
 }
 
 
@@ -97,7 +97,7 @@ fn masked_softmax(logits: &[f32], legal_moves: &[usize]) -> Vec<f32> {
 fn backpropagate(search_path: Vec<usize>, root: &mut Node, values: Vec<f32>) -> () {
     let mut node = root;
     for tile in search_path {
-        node = node.children.get_mut(&tile).unwrap();
+        node = node.children.get_mut(&tile).expect("Child should have this action");
         node.visits += 1;
         node.value_sum += values[node.to_play];
     }
@@ -179,7 +179,7 @@ impl<'py> Runtime<'py> {
         }
 
         let alpha_vec = vec![self.config.dirichlet_alpha; num_actions];
-        let dirichlet = Dirichlet::new(&alpha_vec).unwrap();
+        let dirichlet = Dirichlet::new(&alpha_vec).expect("Noise should be generated ok");
         let noise = dirichlet.sample(&mut rand::thread_rng());
         for (i, (_tile, node)) in root.children.iter_mut().enumerate() {
             node.prior = node.prior * (1.0 - self.config.exploration_fraction)
@@ -216,7 +216,7 @@ impl<'py> Runtime<'py> {
         if num_moves < self.config.sample_moves {
             softmax_sample(visit_dist)
         } else {
-            visit_dist.iter().max_by(|a, b| a.1.cmp(&b.1)).unwrap().0
+            visit_dist.iter().max_by(|a, b| a.1.cmp(&b.1)).expect("visit_dist should not be empty").0
         }
     }
 
@@ -269,13 +269,15 @@ impl<'py> Runtime<'py> {
             let mut search_path = Vec::new();
             while node.is_expanded() {
                 let action = self.select_child(node);
-                node = node.children.get_mut(&action).unwrap();
+                node = node.children.get_mut(&action).expect("Child should exist for this action");
                 let _ = scratch_game.apply(action, None);
                 search_path.push(action);
             }
 
             // Expand and evaluate the leaf node
-            let values = self.evaluate(node, &scratch_game).unwrap();
+            let values = self
+                .evaluate(node, &scratch_game)
+                .map_err(|e| e.to_string())?;
 
             // Backpropagate the value
             backpropagate(search_path, root, values)
@@ -322,7 +324,8 @@ impl<'py> Runtime<'py> {
 
             // println!("Player {} --- {}", game.current_player(), action);
             let _ = game.apply(action, None);
-            root = root.children.get_mut(&action).unwrap();
+            root = root.children.get_mut(&action).expect("Child should have corresponding action");
+            game.board.print_board();
         }
 
         // Send data to train the model

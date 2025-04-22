@@ -43,7 +43,7 @@ impl Board {
             HashSet::new(),
             HashSet::new(),
         ];
-        for i in 0..4 {
+        for (i, player_set) in anchors.iter_mut().enumerate() {
             let start = match i {
                 0 => 0,
                 1 => dim - 1,
@@ -51,7 +51,7 @@ impl Board {
                 3 => dim * (dim - 1),
                 _ => panic!("Invalid player number"),
             };
-            anchors[i].insert(start);
+            player_set.insert(start);
         }
 
         let corner_offsets = [
@@ -79,9 +79,7 @@ impl Board {
         // Check piece is within bounds and does not go over edge of board
         let variant = &piece_variant.variant;
         let piece_squares = &piece_variant.offsets;
-        if offset + variant.len() > self.board.len() {
-            return false;
-        } else if offset % self.dim + piece_variant.width > self.dim {
+        if offset + variant.len() > self.board.len() || offset % self.dim + piece_variant.width > self.dim {
             return false;
         }
 
@@ -178,9 +176,9 @@ impl Board {
         // 15 bonus points for playing all pieces
         for (i, pieces) in self.pieces.iter().enumerate() {
             // Subtract to get the number of pieces remaining
-            scores[i] = scores[i] - TOTAL_TILES;
+            scores[i] -= TOTAL_TILES;
 
-            if pieces.len() == 0 {
+            if pieces.is_empty() {
                 scores[i] += 15;
 
                 // 5 bonus points for playing your smallest piece last
@@ -214,7 +212,7 @@ impl Board {
             }
         }
 
-        return board_state
+        board_state
     }
 
     fn get_channel_rep(&self, current_player: usize) -> Vec<Vec<Vec<bool>>> {
@@ -231,7 +229,7 @@ impl Board {
             }
         }
 
-        return board_state
+        board_state
     }
 
     pub fn print_board(&self) {

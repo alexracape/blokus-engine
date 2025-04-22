@@ -2,7 +2,6 @@ use gloo_console as console;
 use gloo_dialogs::alert;
 use reqwasm::http::Request;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 

@@ -77,9 +77,7 @@ impl PieceVariant {
                 continue;
             }
 
-            for _ in 0..dim - row.len() {
-                variant.push(false);
-            }
+            variant.extend(vec![false; dim-row.len()]);
         }
 
         // Store offsets to allign pieces later
@@ -147,7 +145,7 @@ impl Piece {
         let id = piece_type as usize;
 
         Piece {
-            id: id,
+            id,
             shape: shape.clone(),
             points: shape.iter().flatten().filter(|&x| *x).count() as u32,
             variants: Piece::gen_variants(shape.clone(), dim),

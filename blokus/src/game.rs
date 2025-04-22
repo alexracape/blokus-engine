@@ -6,12 +6,15 @@ use crate::pieces::{Piece, PieceVariant};
 
 const NUM_PLAYERS: usize = 4;
 
+type Move       = (usize, usize, usize);    // indices for piece, variant, offset
+type TileGroup  = Vec<usize>;               // Group of tiles that correspond to a piece
+
 /// Get the legal moves for a piece
 fn get_piece_moves(
     piece_i: usize,
     board: &Board,
     player: usize,
-) -> (Vec<(usize, usize, usize)>, Vec<Vec<usize>>) {
+) -> (Vec<Move>, Vec<TileGroup>) {
     let mut moves = Vec::new();
     let mut tile_groups = Vec::new();
     let piece = &board.get_pieces(player)[piece_i];
@@ -42,7 +45,7 @@ fn get_piece_moves(
 }
 
 /// Get the legal moves for a player, tile placements grouped by move
-fn get_moves(board: &Board, player: usize) -> (Vec<(usize, usize, usize)>, Vec<Vec<usize>>) {
+fn get_moves(board: &Board, player: usize) -> (Vec<Move>, Vec<TileGroup>) {
     let mut moves = Vec::new();
     let mut tile_groups = Vec::new();
     for piece in 0..board.get_pieces(player).len() {
@@ -55,16 +58,16 @@ fn get_moves(board: &Board, player: usize) -> (Vec<(usize, usize, usize)>, Vec<V
 }
 
 /// Get the tile based representation for legal moves
-fn get_tile_moves(board: &Board, player: usize) -> HashMap<usize, HashSet<(usize, usize, usize)>> {
+fn get_tile_moves(board: &Board, player: usize) -> HashMap<usize, HashSet<Move>> {
     let mut tile_rep = HashMap::new();
     let (moves, tile_groups) = get_moves(board, player);
 
     for (id, tiles) in zip(moves, tile_groups) {
         for tile in tiles {
-            if !tile_rep.contains_key(&tile) {
-                tile_rep.insert(tile, HashSet::new());
-            }
-            tile_rep.get_mut(&tile).unwrap().insert(id);
+            tile_rep
+                .entry(tile)                        // takes ownership of `tile`
+                .or_insert_with(HashSet::new)       // creates a new HashSet if absent
+                .insert(id);
         }
     }
 
@@ -94,7 +97,7 @@ pub struct Game {
     pub history: Vec<(i32, i32)>, // Stack of (player, tile)
     eliminated: [bool; NUM_PLAYERS],
     current_player: usize, // Zero indexed!
-    legal_tiles: HashMap<usize, HashSet<(usize, usize, usize)>>, // Map tile to index of the overall move
+    legal_tiles: HashMap<usize, HashSet<Move>>, // Map tile to index of the overall move
     last_piece_lens: [u32; NUM_PLAYERS], // Size of the last piece placed by each player
 }
 
@@ -165,19 +168,25 @@ impl Game {
         for (tile, move_set) in self.legal_tiles.clone() {
             self.legal_tiles.insert(
                 tile,
-                move_set.intersection(&valid_moves).map(|m| *m).collect(),
+                move_set.intersection(&valid_moves).copied().collect(),
             );
-            if self.legal_tiles.get(&tile).unwrap().len() == 0 {
-                self.legal_tiles.remove(&tile);
+            if let Some(moves) = self.legal_tiles.get(&tile) {
+                if moves.is_empty() {
+                    self.legal_tiles.remove(&tile);
+                }
             }
         }
 
         // Advance to next player if necessary
-        if self.legal_tiles.len() == 0 || piece_to_finish.is_some() {
+        if self.legal_tiles.is_empty() || piece_to_finish.is_some() {
             // Removing the player's piece
             let piece = match piece_to_finish {
                 Some(p) => p,
-                None => valid_moves.iter().next().unwrap().0,
+                None => valid_moves
+                    .iter()
+                    .next()
+                    .ok_or("valid_moves must be non-empty")?
+                    .0,
             };
             self.last_piece_lens[self.current_player] = self
                 .board
@@ -210,7 +219,7 @@ impl Game {
         // If they have no legal moves, eliminate them and advance
         if self.eliminated[self.current_player] {
             self.advance_player();
-        } else if self.legal_tiles.len() == 0 {
+        } else if self.legal_tiles.is_empty() {
             self.eliminated[self.current_player] = true;
             self.advance_player();
         }
@@ -236,7 +245,7 @@ impl Game {
     }
 
     pub fn get_legal_tiles(&self) -> Vec<usize> {
-        self.legal_tiles.keys().map(|k| *k).collect()
+        self.legal_tiles.keys().copied().collect()
     }
 
     /// Get the scores for the end of the game
@@ -251,12 +260,18 @@ impl Game {
         let mut indices = Vec::new();
         let mut highest_score = scores[0];
         for (i, score) in scores.iter().enumerate() {
-            if *score == highest_score {
-                indices.push(i);
-            } else if *score > highest_score {
-                indices.clear();
-                indices.push(i);
-                highest_score = *score;
+            match score.cmp(&highest_score) {
+                std::cmp::Ordering::Equal => {
+                    indices.push(i);
+                }
+                std::cmp::Ordering::Greater => {
+                    indices.clear();
+                    indices.push(i);
+                    highest_score = *score;
+                }
+                std::cmp::Ordering::Less => {
+                    // do nothing
+                }
             }
         }
 
@@ -297,10 +312,10 @@ impl Game {
                 board_rep.push(legal_move_rep);
             },
             RepType::Token => {
-                for row in 0..dim {
-                    for col in 0..dim {
-                        let tile = row * dim + col;
-                        board_rep[row][col].push(legal_moves.contains(&tile));
+                for (row_idx, row) in board_rep.iter_mut().enumerate() {
+                    for (col_idx, cell) in row.iter_mut().enumerate() {
+                        let tile = row_idx * dim + col_idx;
+                        cell.push(legal_moves.contains(&tile));
                     }
                 }
             }

@@ -145,7 +145,7 @@ class TestConfig(Config):
         self.batch_size = 64
         self.training_steps = 10
 
-        self.sims_per_move = 5
+        self.sims_per_move = 50
         self.sample_moves = 30
         self.c_base = 19652
         self.c_init = 1.25

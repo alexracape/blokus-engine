@@ -110,9 +110,15 @@ class Config:
 
     def games_per_round(self):
         return self.workers * self.games_per_worker
+    
+    def est_moves_per_game(self):
+        return round((self.dim * self.dim) * .7)
 
-    def requests_per_round(self):
-        return self.games_per_round() *  self.dim**2 * (self.sims_per_move + 2)
+    def est_self_play_requests(self):
+        return self.workers * self.games_per_worker * self.sims_per_move * self.est_moves_per_game()
+
+    def est_eval_requests(self):
+        return self.workers * self.games_per_worker * self.est_moves_per_game()
 
 
 class TestConfig(Config):
@@ -201,11 +207,12 @@ def handle_result_batch(ipc, data):
     data.extend(requests)
 
 
-def handle_inference_requests(config, context, ipc):
+def handle_inference_requests(config, context, ipc, pbar):
     results = []
     while len(results) != config.workers:
         # Handle requests
         num_requests = handle_inference_batch(config, context, ipc)
+        pbar.update(num_requests)
 
         # Check for results
         handle_result_batch(ipc, results)
@@ -349,16 +356,15 @@ def start_workers(config, ipc, task):
 def generate_self_play_data(config, context):
 
     # Spawn asynchronous self-play processes
-    pbar = tqdm(total=config.games_per_worker * config.workers, desc=f"Self-Play Games")
+    pbar = tqdm(total=config.est_self_play_requests(), desc=f"Self-Play Requests")
     ipc = IPC(config.workers)
     game_data = []
     for i in range(config.games_per_worker):
         processes = start_workers(config, ipc, play_training_game)
 
         # Handling inference requests
-        results = handle_inference_requests(config, context, ipc)
+        results = handle_inference_requests(config, context, ipc, pbar)
         game_data.extend(results)
-        pbar.update(len(game_data))
         for p in processes:
             p.join()
 
@@ -371,16 +377,15 @@ def generate_self_play_data(config, context):
 def evaluate_against_random(config, context, step):
 
     # Spawn async self-play processs to test
-    pbar = tqdm(total=config.eval_games_per_worker * config.workers, desc=f"Eval Games")
+    pbar = tqdm(total=config.est_eval_requests(), desc=f"Eval Game Requests")
     ipc = IPC(config.workers)
     game_data = []
     for i in range(config.eval_games_per_worker):
         processes = start_workers(config, ipc, play_test_against_random)
 
         # Handling inference requests
-        results = handle_inference_requests(config, context, ipc)
+        results = handle_inference_requests(config, context, ipc, pbar)
         game_data.extend(results)
-        pbar.update(len(game_data))
         for p in processes:
             p.join()
 

@@ -1,6 +1,7 @@
 // One game of self-play using MCTS and a neural network
 use rand::Rng;
 use rand_distr::{Dirichlet, Distribution};
+use core::f32;
 use std::vec;
 
 use pyo3::prelude::*;
@@ -191,11 +192,10 @@ impl<'py> Runtime<'py> {
     /// Returns the action and the child node's key
     fn select_child(&self, node: &Node) -> usize {
         assert!(node.is_expanded());
-        let mut best_score = 0.0;
+        let mut best_score = f32::NEG_INFINITY;
         let mut best_action = 0;
         for (action, child) in &node.children {
             let score = self.ucb_score(node, child);
-            assert!(score >= 0.0);
             if score >= best_score {
                 best_score = score;
                 best_action = *action;

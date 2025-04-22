@@ -190,18 +190,18 @@ impl<'py> Runtime<'py> {
     /// Select child node to explore
     /// Uses UCB formula to balance exploration and exploitation
     /// Returns the action and the child node's key
-    fn select_child(&self, node: &Node) -> usize {
+    fn select_child(&self, node: &Node) -> Result<usize, &'static str> {
         assert!(node.is_expanded());
         let mut best_score = f32::NEG_INFINITY;
-        let mut best_action = 0;
+        let mut best_action = None;
         for (action, child) in &node.children {
             let score = self.ucb_score(node, child);
             if score >= best_score {
                 best_score = score;
-                best_action = *action;
+                best_action = Some(*action);
             }
         }
-        best_action
+        best_action.ok_or("All UCB scores NaN")
     }
 
     /// Select action from policy
@@ -268,7 +268,7 @@ impl<'py> Runtime<'py> {
             let mut scratch_game = game.clone();
             let mut search_path = Vec::new();
             while node.is_expanded() {
-                let action = self.select_child(node);
+                let action = self.select_child(node)?;
                 node = node.children.get_mut(&action).expect("Child should exist for this action");
                 let _ = scratch_game.apply(action, None);
                 search_path.push(action);
@@ -311,7 +311,6 @@ impl<'py> Runtime<'py> {
         let mut root_node = Node::new(0.0);
         let mut root = &mut root_node;
 
-
         // Run self-play to generate data
         while !game.is_terminal() {
             // Get MCTS policy for current state
@@ -325,7 +324,7 @@ impl<'py> Runtime<'py> {
             // println!("Player {} --- {}", game.current_player(), action);
             let _ = game.apply(action, None);
             root = root.children.get_mut(&action).expect("Child should have corresponding action");
-            game.board.print_board();
+            // game.board.print_board();
         }
 
         // Send data to train the model

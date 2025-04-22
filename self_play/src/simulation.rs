@@ -18,7 +18,7 @@ pub struct Config {
     sample_moves: usize,
     c_base: f32,
     c_init: f32,
-    dirichlet_alpha: f32,
+    dirichlet_alpha: f64,
     exploration_fraction: f32,
 }
 
@@ -168,7 +168,10 @@ impl<'py> Runtime<'py> {
             / (1.0 + child.visits as f32);
         let prior_score = exploration_constant * child.prior;
         let value_score = child.value();
-        prior_score + value_score
+
+        let score = prior_score + value_score;
+        assert!(score.is_finite(), "NaN/Inf in UCB score");
+        score
     }
 
     /// Add noise to the root node to encourage exploration
@@ -179,8 +182,10 @@ impl<'py> Runtime<'py> {
         }
 
         let alpha_vec = vec![self.config.dirichlet_alpha; num_actions];
-        let dirichlet = Dirichlet::new(&alpha_vec).expect("Noise should be generated ok");
-        let noise = dirichlet.sample(&mut rand::thread_rng());
+        let dir = Dirichlet::<f64>::new(&alpha_vec).unwrap();
+        let noise: Vec<f32> = dir.sample(&mut rand::thread_rng())
+                                 .into_iter().map(|x| x as f32).collect();
+        
         for (i, (_tile, node)) in root.children.iter_mut().enumerate() {
             node.prior = node.prior * (1.0 - self.config.exploration_fraction)
                 + noise[i] * self.config.exploration_fraction;
@@ -192,16 +197,13 @@ impl<'py> Runtime<'py> {
     /// Returns the action and the child node's key
     fn select_child(&self, node: &Node) -> Result<usize, &'static str> {
         assert!(node.is_expanded());
-        let mut best_score = f32::NEG_INFINITY;
-        let mut best_action = None;
-        for (action, child) in &node.children {
-            let score = self.ucb_score(node, child);
-            if score >= best_score {
-                best_score = score;
-                best_action = Some(*action);
-            }
-        }
-        best_action.ok_or("All UCB scores NaN")
+        node.children
+            .iter()
+            .map(|(a,c)| (self.ucb_score(node,c), *a))
+            .filter(|(s,_)| s.is_finite())           // discard NaNs defensively
+            .max_by(|x,y| x.partial_cmp(y).unwrap())
+            .map(|(_,a)| a)
+            .ok_or("all UCB scores NaN")
     }
 
     /// Select action from policy
@@ -316,7 +318,8 @@ impl<'py> Runtime<'py> {
             // Get MCTS policy for current state
             let action = match self.mcts(root, &game, &mut policies) {
                 Ok(a) => a,
-                Err(_e) => {
+                Err(e) => {
+                    println!("Error during training game: {}", e);
                     return 1;
                 }
             };

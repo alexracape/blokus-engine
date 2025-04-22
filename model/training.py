@@ -102,7 +102,7 @@ class Config:
         self.sample_moves = 30
         self.c_base = 19652
         self.c_init = 1.25
-        self.dirichlet_alpha = 0.03
+        self.dirichlet_alpha = 0.3
         self.exploration_fraction = 0.25
 
     def to_dict(self):
@@ -209,7 +209,7 @@ def handle_result_batch(ipc, data):
 
 def handle_inference_requests(config, context, ipc, pbar):
     results = []
-    while len(results) != config.workers:
+    while len(results) < config.workers:
         # Handle requests
         num_requests = handle_inference_batch(config, context, ipc)
         pbar.update(num_requests)
@@ -357,9 +357,9 @@ def generate_self_play_data(config, context):
 
     # Spawn asynchronous self-play processes
     pbar = tqdm(total=config.est_self_play_requests(), desc=f"Self-Play Requests")
-    ipc = IPC(config.workers)
     game_data = []
     for i in range(config.games_per_worker):
+        ipc = IPC(config.workers)
         processes = start_workers(config, ipc, play_training_game)
 
         # Handling inference requests

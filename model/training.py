@@ -51,15 +51,15 @@ class TrainingContext:
         model.train()
 
         # Set up optimizer
-        # self.optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-        self.optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay, momentum=config.momentum)
+        self.optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        # self.optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay, momentum=config.momentum)
         self.policy_loss = torch.nn.CrossEntropyLoss().to(self.device)
         self.value_loss = torch.nn.CrossEntropyLoss().to(self.device)
-        self.scheduler = make_warmup_cosine_scheduler(
-            self.optimizer,
-            total_steps=config.training_steps * config.training_rounds,
-            warmup_steps=int(0.05 * config.training_steps * config.training_rounds)
-        )
+        # self.scheduler = make_warmup_cosine_scheduler(
+        #     self.optimizer,
+        #     total_steps=config.training_steps * config.training_rounds,
+        #     warmup_steps=int(0.05 * config.training_steps * config.training_rounds)
+        # )
 
         # Set up replay buffer
         self.buffer = ReplayBuffer(
@@ -124,7 +124,7 @@ class Config:
             "depth": 10
         }
 
-        self.learning_rate = 0.03
+        self.learning_rate = 0.01
         self.weight_decay = 1e-4
         self.momentum = .9
         self.batch_size = 512
@@ -159,10 +159,10 @@ class TestConfig(Config):
     def __init__(self, dim=20, num_workers=4):
         self.dim = dim
         self.workers = num_workers
-        self.games_per_worker = 4
-        self.eval_games_per_worker = 4
+        self.games_per_worker = 2
+        self.eval_games_per_worker = 1
         self.rep = TOKEN
-        self.training_rounds = 2
+        self.training_rounds = 10
         self.transformer = {
             "d_max": 20,
             "embed_dim": 16,
@@ -178,7 +178,7 @@ class TestConfig(Config):
         }
 
         self.buffer_capacity = 500000
-        self.learning_rate = 0.03
+        self.learning_rate = 0.01
         self.weight_decay = 1e-4
         self.momentum = .9
         self.batch_size = 64
@@ -349,7 +349,7 @@ def train(step, context):
     device = context.device
     batch = context.buffer.sample()
     optimizer = context.optimizer
-    scheduler = context.scheduler
+    # scheduler = context.scheduler
 
     # Get a batch of data from the replay buffer
     inputs = batch.get("states").to(device)
@@ -367,7 +367,7 @@ def train(step, context):
     loss = policy_loss + value_loss
     loss.backward()
     optimizer.step()
-    scheduler.step()
+    # scheduler.step()
 
     # Store training statistics
     if not context.testing:

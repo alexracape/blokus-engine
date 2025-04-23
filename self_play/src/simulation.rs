@@ -16,8 +16,7 @@ pub struct Config {
     rep: usize,
     sims_per_move: usize,
     sample_moves: usize,
-    c_base: f32,
-    c_init: f32,
+    c_puct: f32,
     dirichlet_alpha: f64,
     exploration_fraction: f32,
 }
@@ -160,16 +159,14 @@ impl<'py> Runtime<'py> {
     /// Exploration constant is based on the number of visits to the parent node
     /// so that it will encourage exploration of nodes that have not been visited
     fn ucb_score(&self, parent: &Node, child: &Node) -> f32 {
-        let c_base = self.config.c_base;
-        let c_init = self.config.c_init;
-        let parent_visits = parent.visits as f32;
-        let exploration_constant = (((parent_visits + c_base + 1.0) / c_base).ln() + c_init)
-            * parent_visits.sqrt()
-            / (1.0 + child.visits as f32);
-        let prior_score = exploration_constant * child.prior;
-        let value_score = child.value();
 
-        let score = prior_score + value_score;
+        let parent_visits = parent.visits as f32;
+        let child_visits = child.visits as f32;
+        let exploration_constant =  self.config.c_puct * parent_visits.sqrt() / (1.0 + child_visits);
+        let exploration = exploration_constant * child.prior;
+        let exploitation = child.value();
+
+        let score = exploration + exploitation;
         assert!(score.is_finite(), "NaN/Inf in UCB score");
         score
     }

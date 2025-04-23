@@ -1,8 +1,8 @@
 import torch.multiprocessing as mp
 
+import math
 import argparse
 import logging
-import os
 import time
 from queue import Empty
 
@@ -29,13 +29,45 @@ logging.basicConfig(format=f'{BLUE}blokus:{RESET} %(message)s', level=logging.IN
 class TrainingContext:
     """Package all of our training objects into one struct"""
 
-    def __init__(self, model, buffer, optimizer, policy_loss, value_loss, device, testing):
+    def __init__(self, config, testing, loading):
+
+        # Get device
+        if torch.cuda.is_available():
+            self.device = 'cuda'
+        elif torch.backends.mps.is_available():
+            self.device = 'mps'
+        else:
+            self.device = 'cpu'
+
+        # Set up the model
+        if config.rep == CHANNEL:
+            model = ResNet(**config.resnet)
+        else:
+            model = BlokusTransformer(**config.transformer)
+        if loading:
+            logging.info(f"Loading model from {loading}")
+            model.load_state_dict(torch.load(loading, weights_only=True, map_location=self.device))
+        model.to(self.device)
+        model.train()
+
+        # Set up optimizer
+        # self.optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        self.optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay, momentum=config.momentum)
+        self.policy_loss = torch.nn.CrossEntropyLoss().to(self.device)
+        self.value_loss = torch.nn.CrossEntropyLoss().to(self.device)
+        self.scheduler = make_warmup_cosine_scheduler(
+            self.optimizer,
+            total_steps=config.training_steps * config.training_rounds,
+            warmup_steps=int(0.05 * config.training_steps * config.training_rounds)
+        )
+
+        # Set up replay buffer
+        self.buffer = ReplayBuffer(
+            storage=LazyTensorStorage(config.buffer_capacity),
+            batch_size=config.batch_size
+        )
+
         self.model = model
-        self.buffer = buffer
-        self.optimizer = optimizer
-        self.policy_loss = policy_loss
-        self.value_loss = value_loss
-        self.device = device
         self.testing = testing
 
 
@@ -77,7 +109,7 @@ class Config:
         self.games_per_worker = 2
         self.eval_games_per_worker = 2
         self.rep = TOKEN
-        self.training_rounds = 200
+        self.training_rounds = 50
         self.transformer = {
             "d_max": 20,
             "embed_dim": 128,
@@ -92,17 +124,17 @@ class Config:
             "depth": 10
         }
 
-        self.learning_rate = 0.01
+        self.learning_rate = 0.03
         self.weight_decay = 1e-4
+        self.momentum = .9
         self.batch_size = 512
         self.training_steps = 100
         self.buffer_capacity = 50000
 
         self.sims_per_move = 100
         self.sample_moves = 30
-        self.c_base = 305
-        self.c_init = 1.25
-        self.dirichlet_alpha = 0.03
+        self.c_puct = 4
+        self.dirichlet_alpha = 0.3
         self.exploration_fraction = 0.25
 
     def to_dict(self):
@@ -146,17 +178,17 @@ class TestConfig(Config):
         }
 
         self.buffer_capacity = 500000
-        self.learning_rate = 0.01
+        self.learning_rate = 0.03
         self.weight_decay = 1e-4
+        self.momentum = .9
         self.batch_size = 64
         self.training_steps = 10
 
-        self.sims_per_move = 50
+        self.sims_per_move = 100
         self.sample_moves = 30
-        self.c_base = 19652
-        self.c_init = 1.25
+        self.c_puct = 4
         self.dirichlet_alpha = 0.3
-        self.exploration_fraction = 0.5
+        self.exploration_fraction = 0.25
 
 
 def empty_queue(queue):
@@ -317,6 +349,7 @@ def train(step, context):
     device = context.device
     batch = context.buffer.sample()
     optimizer = context.optimizer
+    scheduler = context.scheduler
 
     # Get a batch of data from the replay buffer
     inputs = batch.get("states").to(device)
@@ -334,12 +367,24 @@ def train(step, context):
     loss = policy_loss + value_loss
     loss.backward()
     optimizer.step()
+    scheduler.step()
 
     # Store training statistics
     if not context.testing:
         # var = torch.var(policies, dim=1).mean()
         # print(f"Policy variance in batch: {var}")
         wandb.log({"policy_loss": policy_loss, "value_loss": value_loss}, step=step)
+
+
+def make_warmup_cosine_scheduler(optimizer, total_steps, warmup_steps):
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))  # linear warm-up
+
+        progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+        return 0.5 * (1.0 + math.cos(math.pi * progress))  # cosine decay
+        
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
 def start_workers(config, ipc, task):
@@ -422,48 +467,19 @@ def main():
     if args.save:
         logging.info(f"Keeping track of model checkpoints @ {save_path}")
 
-    if torch.cuda.is_available():
-        device = 'cuda'
-    elif torch.backends.mps.is_available():
-        device = 'mps'
-    else:
-        device = 'cpu'
-    logging.info(f"Using device: {device}")
-
     if args.test:
         config = TestConfig(args.dim, args.workers)
     else:
         config = Config(args.dim, args.workers)
 
-    # Create the model, optimizer, and loss
-    if config.rep == CHANNEL:
-        model = ResNet(**config.resnet)
-    else:
-        model = BlokusTransformer(**config.transformer)
-                 
-    if args.load:
-        logging.info(f"Loading model from {args.load}")
-        model.load_state_dict(torch.load(args.load, weights_only=True, map_location=device))
-    model.to(device)
-    model.train()
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-    policy_loss = torch.nn.CrossEntropyLoss().to(device)
-    value_loss = torch.nn.CrossEntropyLoss().to(device)
+    context = TrainingContext(config, args.test, args.load)
+    logging.info(f"Using device: {context.device}")
 
     # Configure Weights and Biases
     if not args.test:
         wandb.login()
         wandb.init(project="blokus", config=config.to_dict())
-        wandb.watch(model, log_freq=100)
-
-    # Set up replay buffer
-    buffer = ReplayBuffer(
-        storage=LazyTensorStorage(config.buffer_capacity),
-        batch_size=config.batch_size
-    )
-
-    context = TrainingContext(model, buffer, optimizer, policy_loss, value_loss, device, args.test)
+        wandb.watch(context.model, log_freq=100)
 
     # Train the model
     global_step = 0
@@ -475,7 +491,7 @@ def main():
         for step in trange(config.training_steps, desc=f"Training round {round}", leave=False):
             train(global_step, context)
             global_step += 1
-        torch.save(model.state_dict(), save_path)
+        torch.save(context.model.state_dict(), save_path)
 
         evaluate_against_random(config, context, global_step)
 

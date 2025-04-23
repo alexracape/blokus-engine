@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "blokus_engine"
-version = "0.3.5"
+version = "0.3.6"
 readme = "README.md"
 requires-python = ">=3.7"
 authors = [{ name = "Alex Racapé" }]

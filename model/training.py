@@ -56,11 +56,11 @@ class TrainingContext:
         # self.optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay, momentum=config.momentum)
         self.policy_loss = torch.nn.CrossEntropyLoss().to(self.device)
         self.value_loss = torch.nn.CrossEntropyLoss().to(self.device)
-        self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            self.optimizer,
-            milestones=config.lr_milestones,
-            gamma=0.1
-        )
+        # self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        #     self.optimizer,
+        #     milestones=config.lr_milestones,
+        #     gamma=0.1
+        # )
 
         # Set up replay buffer
         self.buffer = ReplayBuffer(
@@ -169,7 +169,7 @@ class TestConfig(Config):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.eval_games_per_worker = 0
+        self.eval_games_per_worker = 10
         self.training_rounds = 1
 
         self.batch_size = 64
@@ -195,9 +195,9 @@ def augment_batch(config, batch, device):
     policies = batch.get("policies")
     values = batch.get("scores")
 
-    k = random.randint(0, 3)
-    states = rotate(config, states, k)
-    policies = rotate(config, policies, k).squeeze(-1)
+    # k = random.randint(0, 3)
+    # states = rotate(config, states, k)
+    # policies = rotate(config, policies, k).squeeze(-1)
 
     return states.to(device), policies.to(device), values.to(device)
 
@@ -373,7 +373,7 @@ def train(config, context, step):
     loss = policy_loss + value_loss
     loss.backward()
     context.optimizer.step()
-    context.scheduler.step()
+    # context.scheduler.step()
 
     # Store training statistics
     if not context.testing:

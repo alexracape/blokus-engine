@@ -116,10 +116,10 @@ class Config:
     def __init__(self, dim=20, num_workers=50):
         self.dim = dim
         self.workers = num_workers
-        self.games_per_worker = 1
-        self.eval_games_per_worker = 1
+        self.games_per_worker = 2
+        self.eval_games_per_worker = 2
         self.rep = TOKEN
-        self.training_rounds = 50
+        self.training_rounds = 90
         self.transformer = {
             "d_max": 20,
             "embed_dim": 128,
@@ -139,7 +139,7 @@ class Config:
         self.weight_decay = 1e-4
         self.momentum = .9
         self.batch_size = 512
-        self.training_steps = 400
+        self.training_steps = 100
         self.buffer_capacity = 50000
 
         self.sims_per_move = 100

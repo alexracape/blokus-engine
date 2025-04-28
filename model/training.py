@@ -10,7 +10,6 @@ import wandb
 from tqdm import trange, tqdm
 import torch
 from torchrl.data import ReplayBuffer, LazyTensorStorage
-from torchvision.transforms import v2
 from tensordict import TensorDict
 import trueskill as ts
 
@@ -358,7 +357,6 @@ def train(config, context, step):
     """Train the model on a batch of data from the replay buffer"""
 
     context.model.train()
-    device = context.device
     # batch = context.buffer.sample()
     inputs, policies, values = augment_batch(config, context.buffer.sample(), context.device)
 

@@ -324,7 +324,7 @@ impl<'py> Runtime<'py> {
             // println!("Player {} --- {}", game.current_player(), action);
             let _ = game.apply(action, None);
             root = root.children.get_mut(&action).expect("Child should have corresponding action");
-            // game.board.print_board();
+            game.board.print_board();
         }
 
         // Send data to train the model
@@ -360,7 +360,7 @@ impl<'py> Runtime<'py> {
             let _ = game.apply(tile, None);
         }
         // println!("Finished Game");
-        // game.board.print_board();
+        game.board.print_board();
         let _ = self.result_queue.call_method1("put", ((self.id, game.get_payoff()[0]),));
         0
     }

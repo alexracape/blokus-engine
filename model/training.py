@@ -1,6 +1,6 @@
 import torch.multiprocessing as mp
 
-import math
+import random
 import argparse
 import logging
 import time
@@ -10,9 +10,11 @@ import wandb
 from tqdm import trange, tqdm
 import torch
 from torchrl.data import ReplayBuffer, LazyTensorStorage
+from torchvision.transforms import v2
 from tensordict import TensorDict
+import trueskill as ts
 
-from blokus_self_play import play_training_game, play_test_against_random
+from blokus_self_play import play_training_game, play_test_against_random, play_test_game
 from resnet import ResNet
 from transformer import BlokusTransformer
 
@@ -55,11 +57,11 @@ class TrainingContext:
         # self.optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay, momentum=config.momentum)
         self.policy_loss = torch.nn.CrossEntropyLoss().to(self.device)
         self.value_loss = torch.nn.CrossEntropyLoss().to(self.device)
-        # self.scheduler = make_warmup_cosine_scheduler(
-        #     self.optimizer,
-        #     total_steps=config.training_steps * config.training_rounds,
-        #     warmup_steps=int(0.05 * config.training_steps * config.training_rounds)
-        # )
+        self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            self.optimizer,
+            milestones=config.lr_milestones,
+            gamma=0.1
+        )
 
         # Set up replay buffer
         self.buffer = ReplayBuffer(
@@ -69,6 +71,15 @@ class TrainingContext:
 
         self.model = model
         self.testing = testing
+
+        # Set up ELO scoring
+        self.env = ts.TrueSkill(draw_probability=0.2)
+        self.ratings = {}
+
+    def get_rating(self, checkpoint):
+        if checkpoint not in self.ratings:
+            self.ratings[checkpoint] = self.env.create_rating()
+        return self.ratings[checkpoint]
 
 
 class IPC:
@@ -106,8 +117,8 @@ class Config:
     def __init__(self, dim=20, num_workers=50):
         self.dim = dim
         self.workers = num_workers
-        self.games_per_worker = 2
-        self.eval_games_per_worker = 2
+        self.games_per_worker = 1
+        self.eval_games_per_worker = 1
         self.rep = TOKEN
         self.training_rounds = 50
         self.transformer = {
@@ -125,10 +136,11 @@ class Config:
         }
 
         self.learning_rate = 0.01
+        self.lr_milestones = [3000]
         self.weight_decay = 1e-4
         self.momentum = .9
         self.batch_size = 512
-        self.training_steps = 100
+        self.training_steps = 400
         self.buffer_capacity = 50000
 
         self.sims_per_move = 100
@@ -156,40 +168,39 @@ class Config:
 class TestConfig(Config):
     """Configuration with testing values to speed things up"""
 
-    def __init__(self, dim=20, num_workers=4):
-        self.dim = dim
-        self.workers = num_workers
-        self.games_per_worker = 2
-        self.eval_games_per_worker = 1
-        self.rep = TOKEN
-        self.training_rounds = 10
-        self.transformer = {
-            "d_max": 20,
-            "embed_dim": 16,
-            "num_heads": 2,
-            "mlp_dim": 32,
-            "num_layers": 2,
-            "dropout": 0.1
-        }
-        self.resnet = {
-            "dim": 20,
-            "width": 256,
-            "depth": 10
-        }
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.eval_games_per_worker = 0
+        self.training_rounds = 1
 
-        self.buffer_capacity = 500000
-        self.learning_rate = 0.01
-        self.weight_decay = 1e-4
-        self.momentum = .9
         self.batch_size = 64
         self.training_steps = 10
 
-        self.sims_per_move = 100
-        self.sample_moves = 30
-        self.c_puct = 4
-        self.dirichlet_alpha = 0.3
-        self.exploration_fraction = 0.25
+        self.sims_per_move = 5
 
+def rotate(config, tensor, k):
+    batch_size = tensor.shape[0]
+    view = tensor.view(batch_size, config.dim, config.dim, -1) 
+    rotated = torch.rot90(view, k, dims=[1, 2]).reshape(batch_size, config.dim * config.dim, -1)
+    return rotated
+
+def augment_batch(config, batch, device):
+    """Augment batch with random rotation
+    
+    Doesn't feel like a great solution, but couldn't find a way to 
+    integrate well with the replay buffer. Time spent here is not 
+    much compared to generateing with self-play though
+    """
+
+    states = batch.get("states")
+    policies = batch.get("policies")
+    values = batch.get("scores")
+
+    k = random.randint(0, 3)
+    states = rotate(config, states, k)
+    policies = rotate(config, policies, k).squeeze(-1)
+
+    return states.to(device), policies.to(device), values.to(device)
 
 def empty_queue(queue):
     ids, items = [], []
@@ -343,21 +354,18 @@ def save(game, buffer: ReplayBuffer, config: Config):
     buffer.extend(data)
 
 
-def train(step, context):
+def train(config, context, step):
     """Train the model on a batch of data from the replay buffer"""
 
+    context.model.train()
     device = context.device
-    batch = context.buffer.sample()
-    optimizer = context.optimizer
-    # scheduler = context.scheduler
+    # batch = context.buffer.sample()
+    inputs, policies, values = augment_batch(config, context.buffer.sample(), context.device)
 
     # Get a batch of data from the replay buffer
-    inputs = batch.get("states").to(device)
-    policies = batch.get("policies").to(device)
-    values = batch.get("scores").to(device)
 
     # Train the model
-    optimizer.zero_grad()
+    context.optimizer.zero_grad()
     policy_logits, value_logits = context.model(inputs)
     # mask = inputs[:, :, :, 4].view(inputs.size(0), -1)
     # masked_policy_logits = policy_logits.masked_fill(mask, -1e9)
@@ -366,25 +374,14 @@ def train(step, context):
     value_loss = context.value_loss(value_logits, values)
     loss = policy_loss + value_loss
     loss.backward()
-    optimizer.step()
-    # scheduler.step()
+    context.optimizer.step()
+    context.scheduler.step()
 
     # Store training statistics
     if not context.testing:
         # var = torch.var(policies, dim=1).mean()
         # print(f"Policy variance in batch: {var}")
         wandb.log({"policy_loss": policy_loss, "value_loss": value_loss}, step=step)
-
-
-def make_warmup_cosine_scheduler(optimizer, total_steps, warmup_steps):
-    def lr_lambda(current_step):
-        if current_step < warmup_steps:
-            return float(current_step) / float(max(1, warmup_steps))  # linear warm-up
-
-        progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
-        return 0.5 * (1.0 + math.cos(math.pi * progress))  # cosine decay
-        
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
 def start_workers(config, ipc, task):
@@ -418,10 +415,36 @@ def generate_self_play_data(config, context):
     for game in game_data:
         save(game, context.buffer, config)
 
+def evaluate_against_checkpoint(config, context, step):
+
+    # Spawn async self-play processs to test
+    pbar = tqdm(total=config.est_eval_requests(), desc=f"Eval Game Requests")
+    ipc = IPC(config.workers)
+    game_data = []
+    for i in range(config.eval_games_per_worker):
+        processes = start_workers(config, ipc, play_test_game)
+
+        # Handling inference requests
+        results = handle_inference_requests(config, context, ipc, pbar)
+        game_data.extend(results)
+        for p in processes:
+            p.join()
+
+    # Save eval stats
+    pbar.close()
+
+    # rating_groups = [[context.get_rating(p)] for p in players]
+    # new_groups    = context.env.rate(rating_groups, ranks=ranks)
+
+    # logging.info(f"Score = {average}")
+    # if not context.testing:
+    #     wandb.log({"win_ratio": average}, step=step)
+
 
 def evaluate_against_random(config, context, step):
 
     # Spawn async self-play processs to test
+    context.model.eval()
     pbar = tqdm(total=config.est_eval_requests(), desc=f"Eval Game Requests")
     ipc = IPC(config.workers)
     game_data = []
@@ -459,6 +482,7 @@ def main():
     parser.add_argument('--workers', type=int, default=1, help="Number of workers to use (default: 1)")
     parser.add_argument('--load', type=str, help="Path to load starting model")
     parser.add_argument('--save', type=str, help="Path to save model to")
+    parser.add_argument('--resume', type=int, help="Id for wandb run to resume")
     args = parser.parse_args()
     logging.info(f"Using {args.workers} workerss")
     logging.info(f"Running in {'test' if args.test else 'full power'} mode")
@@ -468,7 +492,7 @@ def main():
         logging.info(f"Keeping track of model checkpoints @ {save_path}")
 
     if args.test:
-        config = TestConfig(args.dim, args.workers)
+        config = TestConfig(dim=args.dim, num_workers=args.workers)
     else:
         config = Config(args.dim, args.workers)
 
@@ -478,7 +502,10 @@ def main():
     # Configure Weights and Biases
     if not args.test:
         wandb.login()
-        wandb.init(project="blokus", config=config.to_dict())
+        if args.resume:
+            wandb.init(project="blokus", id=args.resume, resume="must")
+        else:
+            wandb.init(project="blokus", config=config.to_dict())
         wandb.watch(context.model, log_freq=100)
 
     # Train the model
@@ -489,7 +516,7 @@ def main():
 
         # Train the model
         for step in trange(config.training_steps, desc=f"Training round {round}", leave=False):
-            train(global_step, context)
+            train(config, context, global_step)
             global_step += 1
         torch.save(context.model.state_dict(), save_path)
 

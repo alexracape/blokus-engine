@@ -14,10 +14,9 @@ from queue import Empty
 from tqdm import trange, tqdm
 import torch
 from torchrl.data import ReplayBuffer, LazyTensorStorage
-from tensordict import tensorclass
 
 from resnet import ResNet
-from training import TestConfig, handle_inference_batch
+from training import TrainingContext, IPC, TestConfig, handle_inference_batch
 from blokus_self_play import play_test_game
 
 
@@ -29,50 +28,39 @@ def main():
 
     # Parse args for number of games
     test_games = int(sys.argv[1])
-    logging.info(f"Testing with {test_games} games")
-    config = TestConfig(num_cpus=8)
+    first_model_path = sys.argv[2]
+    second_model_path = sys.argv[3]
+    dim = int(sys.argv[4])
+    num_workers = 10
+    config = TestConfig(dim, num_workers)
 
     # Load environment variables
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logging.info(f"Using device: {device}")
+    context = TrainingContext(config, True, first_model_path)
+    context.model.eval()
+    ipc = IPC(num_workers)
 
-    # Load models and set up loss and optimizer
-    first_model_path = sys.argv[2]
-    model = ResNet(10, 256)
-    model.load_state_dict(torch.load(first_model_path, weights_only=True, map_location=device))
-    model.to(device)
-    model.eval()
+    baseline_context = TrainingContext(config, True, second_model_path)
+    baseline_context.model.eval()
+    baseline_ipc = IPC(num_workers)
+    baseline_ipc.pipes_from_model = ipc.pipes_from_model
+    baseline_ipc.pipes_to_workers = ipc.pipes_to_workers
 
-    second_model_path = sys.argv[3]
-    baseline = ResNet(2, 16)
-    baseline.load_state_dict(torch.load(second_model_path, weights_only=True, map_location=device))
-    baseline.to(device)
-    baseline.eval()
-
-    # Create the queues and pipes
-    manager = mp.Manager()
-    model_queue = manager.Queue(maxsize=test_games)
-    baseline_queue = manager.Queue(maxsize=test_games)
-    pipes_to_model = []
-    pipes_to_workers = []
-    for i in range(test_games):
-        a, b = mp.Pipe()
-        pipes_to_model.append(a)
-        pipes_to_workers.append(b)
-
+    logging.info(f"Testing with {test_games} games")
+    logging.info(f"Using device: {context.device}")
+    
     # Generate spawn asynchronous self-play processes
-    with mp.Pool(config.cpus) as pool:
+    with mp.Pool(num_workers) as pool:
         game_data = pool.starmap_async(
             play_test_game,
-            [(id, model_queue, baseline_queue, pipes_to_model[id]) for id in range(test_games)]
+            [(id, ipc.request_queue, baseline_ipc.request_queue, ipc.pipes_from_model[id]) for id in range(test_games)]
         )
 
         # Start handling inference requests
-        total_requests_ish = test_games * DIM * DIM
+        total_requests_ish = test_games * dim * dim
         pbar = tqdm(total=total_requests_ish, desc=f"Testing Requests Round {round}")
         while not game_data.ready():
-            model_requests = handle_inference_batch(model, device, model_queue, pipes_to_workers)
-            baseline_requests = handle_inference_batch(baseline, device, baseline_queue, pipes_to_workers)
+            model_requests = handle_inference_batch(config, context, ipc)
+            baseline_requests = handle_inference_batch(config, baseline_context, baseline_ipc)
             pbar.update(model_requests + baseline_requests)
         pbar.close()
 

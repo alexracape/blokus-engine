@@ -129,7 +129,7 @@ class Config:
             "dropout": 0.1
         }
         self.resnet = {
-            "dim": 20,
+            "dim": self.dim,
             "width": 256,
             "depth": 10
         }
@@ -137,7 +137,7 @@ class Config:
         self.learning_rate = 0.01
         self.lr_milestones = [3000]
         self.weight_decay = 1e-4
-        self.momentum = .9
+        # self.momentum = .9
         self.batch_size = 512
         self.training_steps = 100
         self.buffer_capacity = 50000
@@ -169,8 +169,9 @@ class TestConfig(Config):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.eval_games_per_worker = 10
+        self.eval_games_per_worker = 1
         self.training_rounds = 1
+        self.rep = TOKEN
 
         self.batch_size = 64
         self.training_steps = 10
@@ -223,7 +224,7 @@ def handle_inference_batch(config, context, ipc):
     time.sleep(.0001)
     ids, requests = empty_queue(ipc.request_queue)
     if config.rep == CHANNEL:
-        batch = torch.tensor(requests, dtype=torch.float32).view(-1, 5, config.dim, config.gdim).to(context.device)
+        batch = torch.tensor(requests, dtype=torch.float32).view(-1, 5, config.dim, config.dim).to(context.device)
     else:
         batch = torch.tensor(requests, dtype=torch.float32).view(-1, config.dim * config.dim, 5).to(context.device)
 

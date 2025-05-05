@@ -41,7 +41,6 @@ class ResNet(nn.Module):
     def __init__(self, depth, width, dim):
         super(ResNet, self).__init__()
         self.dim = dim
-        self.max_dim = 20
         self.blocks = depth
         self.width = width
         self.piece_filters = []
@@ -59,7 +58,7 @@ class ResNet(nn.Module):
             nn.BatchNorm2d(1),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(self.max_dim * self.max_dim, 4),
+            nn.Linear(self.dim * self.dim, 4),
             nn.Tanh(),
         )
 

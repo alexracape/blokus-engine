@@ -56,11 +56,11 @@ class TrainingContext:
         # self.optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay, momentum=config.momentum)
         self.policy_loss = torch.nn.CrossEntropyLoss().to(self.device)
         self.value_loss = torch.nn.CrossEntropyLoss().to(self.device)
-        self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            self.optimizer,
-            milestones=config.lr_milestones,
-            gamma=0.1
-        )
+        # self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        #     self.optimizer,
+        #     milestones=config.lr_milestones,
+        #     gamma=0.1
+        # )
 
         # Set up replay buffer
         self.buffer = ReplayBuffer(
@@ -116,10 +116,10 @@ class Config:
     def __init__(self, dim=20, num_workers=50):
         self.dim = dim
         self.workers = num_workers
-        self.games_per_worker = 1
-        self.eval_games_per_worker = 1
+        self.games_per_worker = 2
+        self.eval_games_per_worker = 2
         self.rep = TOKEN
-        self.training_rounds = 50
+        self.training_rounds = 90
         self.transformer = {
             "d_max": 20,
             "embed_dim": 128,
@@ -129,7 +129,7 @@ class Config:
             "dropout": 0.1
         }
         self.resnet = {
-            "dim": 20,
+            "dim": self.dim,
             "width": 256,
             "depth": 10
         }
@@ -137,9 +137,9 @@ class Config:
         self.learning_rate = 0.01
         self.lr_milestones = [3000]
         self.weight_decay = 1e-4
-        self.momentum = .9
+        # self.momentum = .9
         self.batch_size = 512
-        self.training_steps = 400
+        self.training_steps = 100
         self.buffer_capacity = 50000
 
         self.sims_per_move = 100
@@ -169,8 +169,9 @@ class TestConfig(Config):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.eval_games_per_worker = 0
+        self.eval_games_per_worker = 1
         self.training_rounds = 1
+        self.rep = TOKEN
 
         self.batch_size = 64
         self.training_steps = 10
@@ -195,9 +196,9 @@ def augment_batch(config, batch, device):
     policies = batch.get("policies")
     values = batch.get("scores")
 
-    k = random.randint(0, 3)
-    states = rotate(config, states, k)
-    policies = rotate(config, policies, k).squeeze(-1)
+    # k = random.randint(0, 3)
+    # states = rotate(config, states, k)
+    # policies = rotate(config, policies, k).squeeze(-1)
 
     return states.to(device), policies.to(device), values.to(device)
 
@@ -223,7 +224,7 @@ def handle_inference_batch(config, context, ipc):
     time.sleep(.0001)
     ids, requests = empty_queue(ipc.request_queue)
     if config.rep == CHANNEL:
-        batch = torch.tensor(requests, dtype=torch.float32).view(-1, 5, config.dim, config.gdim).to(context.device)
+        batch = torch.tensor(requests, dtype=torch.float32).view(-1, 5, config.dim, config.dim).to(context.device)
     else:
         batch = torch.tensor(requests, dtype=torch.float32).view(-1, config.dim * config.dim, 5).to(context.device)
 
@@ -373,7 +374,7 @@ def train(config, context, step):
     loss = policy_loss + value_loss
     loss.backward()
     context.optimizer.step()
-    context.scheduler.step()
+    # context.scheduler.step()
 
     # Store training statistics
     if not context.testing:

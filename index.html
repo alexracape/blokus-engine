@@ -5,8 +5,8 @@
         <title>Blokus GUI</title>
         
 <script type="module">
-import init, * as bindings from '/gui-f9aa986a1aac420b.js';
-const wasm = await init('/gui-f9aa986a1aac420b_bg.wasm');
+import init, * as bindings from '/blokus-engine/gui-dfa50a62a74cb7e5.js';
+const wasm = await init('/blokus-engine/gui-dfa50a62a74cb7e5_bg.wasm');
 
 
 window.wasmBindings = bindings;
@@ -15,7 +15,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-        <link rel="stylesheet" href="/style-19bf2286175ad972.css" integrity="sha384-ns/UlgccVvIjxFDnUpLvl8IP1/+OZ+TprTNSz34TWyLUIc9Spd5tKlmbwf3Nnq14"/>
-    <link rel="modulepreload" href="/gui-f9aa986a1aac420b.js" crossorigin="anonymous" integrity="sha384-QhmatQZoU148+VaFAwhNBHGJND7EGRiG2O1C7bIHQOGSjHxM7LI6KmlClmKR9fyP"><link rel="preload" href="/gui-f9aa986a1aac420b_bg.wasm" crossorigin="anonymous" integrity="sha384-eFRCHuj0DuhcKzqO3uAF3Yo8i3XED9PcWi4Af2ye15vLS6Yppgs1OHkaKP3sXQZ+" as="fetch" type="application/wasm"></head>
+        <link rel="stylesheet" href="/blokus-engine/style-19bf2286175ad972.css" integrity="sha384-ns/UlgccVvIjxFDnUpLvl8IP1/+OZ+TprTNSz34TWyLUIc9Spd5tKlmbwf3Nnq14"/>
+    <link rel="modulepreload" href="/blokus-engine/gui-dfa50a62a74cb7e5.js" crossorigin="anonymous" integrity="sha384-QhmatQZoU148+VaFAwhNBHGJND7EGRiG2O1C7bIHQOGSjHxM7LI6KmlClmKR9fyP"><link rel="preload" href="/blokus-engine/gui-dfa50a62a74cb7e5_bg.wasm" crossorigin="anonymous" integrity="sha384-X/5xRIJh9kFtbGWMcG280qcN7vN1bUD6OeW7NalXq5+tQY0dWUeXUKgLXG8bGuG/" as="fetch" type="application/wasm"></head>
     <body></body>
 </html>

@@ -119,7 +119,7 @@ class Config:
         self.games_per_worker = 2
         self.eval_games_per_worker = 2
         self.rep = TOKEN
-        self.training_rounds = 90
+        self.training_rounds = 25
         self.transformer = {
             "d_max": 20,
             "embed_dim": 128,
@@ -134,12 +134,12 @@ class Config:
             "depth": 10
         }
 
-        self.learning_rate = 0.01
+        self.learning_rate = 0.001
         self.lr_milestones = [3000]
         self.weight_decay = 1e-4
         # self.momentum = .9
         self.batch_size = 512
-        self.training_steps = 100
+        self.training_steps = 400
         self.buffer_capacity = 50000
 
         self.sims_per_move = 100
@@ -196,9 +196,9 @@ def augment_batch(config, batch, device):
     policies = batch.get("policies")
     values = batch.get("scores")
 
-    # k = random.randint(0, 3)
-    # states = rotate(config, states, k)
-    # policies = rotate(config, policies, k).squeeze(-1)
+    k = random.randint(0, 3)
+    states = rotate(config, states, k)
+    policies = rotate(config, policies, k).squeeze(-1)
 
     return states.to(device), policies.to(device), values.to(device)
 

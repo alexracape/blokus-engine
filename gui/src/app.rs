@@ -316,7 +316,13 @@ pub fn App() -> Html {
 
     let on_reset = {
         let state = state.clone();
-        Callback::from(move |_| state.set(Game::reset(D)))
+        let policy_clone = policy.clone();
+        let scores_clone = scores.clone();
+        Callback::from(move |_| {
+            state.set(Game::reset(D));
+            policy_clone.set(vec![0.0; 400]);
+            scores_clone.set(vec![0.25; 4]);
+        })
     };
 
     let toggle_eval = {

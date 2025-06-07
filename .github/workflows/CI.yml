@@ -126,7 +126,7 @@ jobs:
 
       - name: build gui
         working-directory: ./gui
-        run: trunk build --release
+        run: trunk build --release --public-url /blokus-engine/
 
       - uses: peaceiris/actions-gh-pages@v3
         with:

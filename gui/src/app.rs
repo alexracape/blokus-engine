@@ -267,8 +267,8 @@ fn alert_game_over(game: &Game) {
 #[function_component]
 pub fn App() -> Html {
     let state = use_state(|| Game::reset(D));
-    let show_eval = use_state(|| false);
-    let show_policy = use_state(|| false);
+    let show_eval = use_state(|| true);
+    let show_policy = use_state(|| true);
     let policy = use_state(|| vec![0.0; 400]);
     let scores = use_state(|| vec![0.25; 4]);
 

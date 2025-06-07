@@ -1,6 +1,5 @@
 use gloo_console as console;
 use gloo_dialogs::alert;
-use gloo_timers::future::TimeoutFuture;
 use reqwasm::http::Request;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

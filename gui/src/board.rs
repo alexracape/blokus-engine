@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use gloo_console as console;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
@@ -8,6 +7,48 @@ use yew::events::DragEvent;
 use yew::prelude::*;
 use yew::{function_component, html, Properties};
 
+
+fn softmax(logits: &[f32]) -> Vec<f32> {
+    // Find max for numerical stability
+    let max_logit = logits.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+    
+    // Compute exp(x - max) for each logit
+    let exp_logits: Vec<f32> = logits.iter()
+        .map(|&x| (x - max_logit).exp())
+        .collect();
+    
+    // Sum all exponentials
+    let sum_exp: f32 = exp_logits.iter().sum();
+    
+    // Normalize to get probabilities
+    exp_logits.iter().map(|&x| x / sum_exp).collect()
+}
+
+fn power_scale_color(prob: f32, max_prob: f32, power: f32) -> String {
+    let normalized = prob / max_prob;
+    let scaled = normalized.powf(1.0 / power); // power > 1 exaggerates differences
+    
+    // Use a high-contrast color scheme
+    if scaled < 0.2 {
+        "rgb(255, 255, 255)".to_string() // White for very low
+    } else if scaled < 0.4 {
+        let t = (scaled - 0.2) / 0.2;
+        let intensity = (t * 128.0) as u8;
+        format!("rgb({}, {}, 255)", 255 - intensity, 255 - intensity)
+    } else if scaled < 0.6 {
+        let t = (scaled - 0.4) / 0.2;
+        let red = (t * 255.0) as u8;
+        format!("rgb({}, 0, 255)", red)
+    } else if scaled < 0.8 {
+        let t = (scaled - 0.6) / 0.2;
+        let blue = (255.0 - t * 255.0) as u8;
+        format!("rgb(255, 0, {})", blue)
+    } else {
+        let t = (scaled - 0.8) / 0.2;
+        let green = (t * 255.0) as u8;
+        format!("rgb(255, {}, 0)", green)
+    }
+}
 
 #[derive(Properties, Clone, PartialEq)]
 pub struct Props {
@@ -29,6 +70,7 @@ pub fn BlokusBoard(props: &Props) -> Html {
     } = props.clone();
 
     let dim = board[0].len();
+    let policy_probs = softmax(&policy);
 
     let ondragover = {
         move |event: DragEvent| {
@@ -48,7 +90,7 @@ pub fn BlokusBoard(props: &Props) -> Html {
                         // Check each player channel to see who occupies the square
                         let mut player_option: usize = 0;
                         for p in 0..4 {
-                            if board[i][j][p] {
+                            if board[p][i][j] {
                                 player_option = p + 1; // Player 1-indexed
                                 break;
                             }
@@ -67,13 +109,8 @@ pub fn BlokusBoard(props: &Props) -> Html {
                             square_style = format!("{} anchor", square_style);
                         }
 
-                        let policy_val = policy[index];
-                        console::log!(policy_val);
-                        let intensity = 10.0 * policy_val * 255.0;
-                        let red = 255.0 - intensity;
-                        let blue = 255.0 - intensity;
-                        let green = 255.0;
-                        let color = format!("rgb({}, {}, {})", red, green, blue);
+                        let policy_val = policy_probs[index];
+                        let color = power_scale_color(policy_val, 1.0, 3.0);
 
                         let ondrop = {
                             on_board_drop.reform(move |e: DragEvent| {
@@ -94,7 +131,7 @@ pub fn BlokusBoard(props: &Props) -> Html {
 
                         html! {
                             <div>
-                            if show_policy && policy_val > 0.0 {
+                            if show_policy && policy_val > 0.0001 {
                                 <div id={index.to_string()}  class={square_style} {ondrop} {ondragover}
                                     style={format!("background-color: {};", color)}>
                                 </div>

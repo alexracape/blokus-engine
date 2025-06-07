@@ -1,7 +1,9 @@
 use gloo_console as console;
 use gloo_dialogs::alert;
+use gloo_timers::future::TimeoutFuture;
 use reqwasm::http::Request;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
@@ -10,91 +12,147 @@ use crate::pieces::PieceTray;
 use blokus::game::Game;
 use blokus::board::RepType;
 
-const SERVER_ADDRESS: &str = "http://127.0.0.1:8000/process_request";
+const SERVER_ADDRESS: &str = "https://aracape-blokus.hf.space/gradio_api/call/predict";
 const D: usize = 20;
-const BOARD_SIZE: usize = 400;
 
-#[derive(Serialize, Deserialize, Debug)]
-struct GameStateRequest {
-    player: usize,
-    data: Vec<Vec<Vec<bool>>>,
+#[derive(Deserialize, Debug)]
+struct EventResponse {
+    event_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct GameStateResponse {
+struct ModelOutput {
     policy: Vec<f32>,
     values: Vec<f32>,
-    status: i32,
 }
 
-fn print_rep(rep: &Vec<Vec<Vec<bool>>>) {
-    let mut str_rep = String::new();
-    for i in 0..5 {
-        for j in 0..D {
-            for k in 0..D {
-                if rep[i][j][k] {
-                    str_rep.push_str("[X]");
-                } else {
-                    str_rep.push_str("[ ]");
+fn softmax(arr: Vec<f32>) -> Vec<f32> {
+    let max_val = arr.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+    
+    // Subtract max for numerical stability, then exp
+    let exp_vals: Vec<f32> = arr.iter().map(|&val| (val - max_val).exp()).collect();
+    
+    // Normalize by sum
+    let sum: f32 = exp_vals.iter().sum();
+    exp_vals.iter().map(|&val| val / sum).collect()
+}
+
+pub fn parse_sse_response(sse_text: &str) -> Result<Vec<Value>, String> 
+{    
+    for line in sse_text.lines() {
+        let trimmed = line.trim();
+        
+        // Skip empty lines and comments
+        if trimmed.is_empty() || trimmed.starts_with(':') {
+            continue;
+        }
+        
+        // Parse SSE field: value format
+        if let Some(colon_pos) = trimmed.find(':') {
+            let field = &trimmed[..colon_pos].trim();
+            let value = trimmed[colon_pos + 1..].trim();
+            
+            // We're interested in data fields
+            if *field == "data" {
+                match serde_json::from_str::<Vec<Value>>(value) {
+                    Ok(data_array) => return Ok(data_array),
+                    Err(e) => {
+                        return Err(format!("Failed to parse Gradio data array: {}", e));
+                    }
                 }
             }
-            str_rep.push_str("\n");
-        }
-        str_rep.push_str("\n");
-    }
-    console::log!(str_rep);
-}
-
-fn get_state_rep(game: &Game) -> GameStateRequest {
-    GameStateRequest {
-        player: game.current_player(),
-        data: game.get_game_state(RepType::Token),
-    }
-}
-
-/// Rotates the policy 90 degrees to the right
-fn rotate_policy(state: Vec<f32>) -> Vec<f32> {
-    let mut rotated = vec![0.0; BOARD_SIZE];
-    for i in 0..D {
-        for j in 0..D {
-            rotated[j * D + (D - 1 - i)] = state[i * D + j];
         }
     }
+    
+    return Err("No valid JSON data found in SSE response".to_string());
+}
 
-    rotated.to_vec()
+pub fn parse_python_tuple_string(tuple_str: &str) -> Result<(Vec<f32>, Vec<f32>), String> {
+    // Remove outer parentheses
+    let content = tuple_str.trim();
+    if !content.starts_with('(') || !content.ends_with(')') {
+        return Err("String doesn't start and end with parentheses".to_string());
+    }
+    
+    let inner = &content[1..content.len()-1];
+    
+    // Find the split point between the two arrays
+    // Look for "], [" pattern
+    let split_pattern = "], [";
+    let split_pos = inner.find(split_pattern)
+        .ok_or("Could not find split between two arrays")?;
+    
+    // Extract the two array strings
+    let first_array_str = format!("[{}]", &inner[1..split_pos]); // Remove leading '[' and add it back
+    let second_array_str = format!("[{}]", &inner[split_pos + split_pattern.len()..inner.len()-1]); // Remove trailing ']' and add it back
+    
+    // Parse both arrays
+    let policy: Vec<f32> = serde_json::from_str(&first_array_str)
+        .map_err(|e| format!("Failed to parse policy array: {}", e))?;
+    
+    let values: Vec<f32> = serde_json::from_str(&second_array_str)
+        .map_err(|e| format!("Failed to parse values array: {}", e))?;
+    
+    Ok((policy, values))
 }
 
 /// Query the model server
-async fn query_model(state: &Game) -> Result<GameStateResponse, String> {
-    let request = get_state_rep(state);
-    print_rep(&request.data);
-    let serialized_request = serde_json::to_string(&request).unwrap();
-    let current_player = state.current_player();
+async fn query_model(state: &Game) -> Result<ModelOutput, String> {
+    let rep = state.get_game_state(RepType::Token);
+    let request = serde_json::json!({
+        "data": [serde_json::to_string(&rep).unwrap()]
+    });
+    state.board.print_board();
 
-    // Send POST request to FastAPI server
-    match Request::post(SERVER_ADDRESS)
+    let post_response = Request::post(SERVER_ADDRESS)
         .header("Content-Type", "application/json")
-        .body(serialized_request)
+        .body(serde_json::to_string(&request).unwrap())
         .send()
         .await
-    {
-        Ok(response) => {
-            let json_value = response.json().await.unwrap();
-            let mut response: GameStateResponse = serde_json::from_value(json_value).unwrap();
-            if response.status != 200 {
-                console::error!("AI failed to find a move");
-                return Err("Failed to query the model".to_string());
-            }
+        .map_err(|e| format!("Failed to submit request: {:?}", e))?;
+    
+    let event_response: EventResponse = post_response.json().await
+        .map_err(|e| format!("Failed to parse event response: {:?}", e))?;
+        
+    // Step 2: GET request to fetch results using event_id
+    let get_url = format!("{}/{}", SERVER_ADDRESS, event_response.event_id);
+    
+    // Poll until we get results
+    for attempt in 0..60 { // 60 attempts = 60 seconds max
+        
+        let get_response = Request::get(&get_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to poll results: {:?}", e))?;
 
-            // Reorient
-            for _ in 0..(current_player) {
-                response.policy = rotate_policy(response.policy);
-            }
-            response.values.rotate_right(current_player);
-            Ok(response)
+        let response_text = get_response.text().await
+            .map_err(|e| format!("Failed to get response text: {:?}", e))?;
+
+        // Parse the SSE response
+        let data = parse_sse_response(&response_text)
+            .map_err(|e| format!("Failed to parse SSE response: {}", e))?;
+
+        // Check if we have results
+        if data.is_empty() {
+            console::log!(format!("Polling attempt {}, no data yet...", attempt + 1));
+            continue;
         }
-        Err(e) => Err(format!("Failed to get AI move: {:?}", e)),
+
+        let tuple_string = data[0].as_str()
+        .ok_or("Expected string in data array")?;
+    
+        // Parse the Python tuple format
+        let (policy, values) = parse_python_tuple_string(tuple_string)
+            .map_err(|e| format!("Failed to parse tuple string: {}", e))?;
+        
+        let output = ModelOutput {
+            policy,
+            values
+        };
+        return Ok(output);
     }
+    
+    Err("Timeout waiting for model response after 60 seconds".to_string())
 }
 
 /// Takes state and returns tile to place
@@ -217,7 +275,7 @@ pub fn App() -> Html {
                     // Get Policy and Eval
                     let response = query_model(&new_state).await.unwrap();
                     policy_state.set(response.policy);
-                    scores_state.set(response.values);
+                    scores_state.set(softmax(response.values));
                 }
             });
         })

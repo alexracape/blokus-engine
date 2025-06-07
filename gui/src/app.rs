@@ -155,8 +155,8 @@ async fn query_model(state: &Game) -> Result<ModelOutput, String> {
     Err("Timeout waiting for model response after 60 seconds".to_string())
 }
 
-/// Takes state and returns tile to place
-async fn get_ai_move(state: &Game) -> Result<usize, String> {
+/// Takes state and returns tile to place along with policy and values
+async fn get_ai_move(state: &Game) -> Result<(usize, Vec<f32>, Vec<f32>), String> {
     let response = query_model(state).await.unwrap();
     let tile = response
         .policy
@@ -166,27 +166,77 @@ async fn get_ai_move(state: &Game) -> Result<usize, String> {
         .map(|(i, _)| i)
         .expect("No policy found");
 
-    Ok(tile)
+    Ok((tile, response.policy, response.values))
 }
 
-/// Applies AI moves to state after player has gone
-async fn handle_ai_moves(state: Game) -> Game {
-    let mut next_state = state.clone();
-    let mut current_ai = next_state.current_player();
-    while current_ai != 0 && !next_state.is_terminal() {
-        // THIS IS THE CONDITION, DOESN'T WORK WHEN HUMAN IS ELIMINATED
-        let tile = get_ai_move(&next_state).await.unwrap();
-        if let Err(e) = next_state.apply(tile, None) {
-            console::error!("Failed to apply AI move:m", e);
-            break;
+/// Handles a single AI move and triggers the next one
+async fn handle_single_ai_move(
+    current_state: Game,
+    state_setter: UseStateHandle<Game>,
+    policy_setter: UseStateHandle<Vec<f32>>,
+    scores_setter: UseStateHandle<Vec<f32>>,
+) {
+    let mut next_state = current_state.clone();
+    
+    // Check if current player is AI and game isn't over
+    if next_state.current_player() == 0 || next_state.is_terminal() {
+        // Human's turn or game over - get policy/eval and stop
+        if !next_state.is_terminal() {
+            if let Ok(response) = query_model(&next_state).await {
+                policy_setter.set(response.policy);
+                scores_setter.set(softmax(response.values));
+            }
+        } else {
+            alert_game_over(&next_state);
         }
-
-        current_ai = next_state.current_player();
-        console::log!("AI placed piece at: {:?}", tile);
-        console::log!("Current player: ", current_ai);
+        return;
     }
-
-    next_state
+    
+    // Make AI move and get updated policy/values for the current position
+    match get_ai_move(&next_state).await {
+        Ok((tile, policy, values)) => {
+            // Update policy and scores first (for the position before the move)
+            policy_setter.set(policy);
+            scores_setter.set(softmax(values));
+            
+            if let Err(e) = next_state.apply(tile, None) {
+                console::error!("Failed to apply AI move:", e);
+                return;
+            }
+            
+            console::log!("AI placed piece at: {:?}", tile);
+            console::log!("Current player: ", next_state.current_player());
+            
+            // Update the UI with the new state
+            state_setter.set(next_state.clone());
+            
+            // Check if game is over after this move
+            if next_state.is_terminal() {
+                alert_game_over(&next_state);
+                return;
+            }
+            
+            // Add a small delay to make the move and updates visible
+            //TimeoutFuture::new(5000).await;
+            
+            // Recursively handle the next AI move
+            let state_setter_clone = state_setter.clone();
+            let policy_setter_clone = policy_setter.clone();
+            let scores_setter_clone = scores_setter.clone();
+            
+            spawn_local(async move {
+                handle_single_ai_move(
+                    next_state,
+                    state_setter_clone,
+                    policy_setter_clone,
+                    scores_setter_clone,
+                ).await;
+            });
+        }
+        Err(e) => {
+            console::error!("Failed to get AI move:", e);
+        }
+    }
 }
 
 fn alert_game_over(game: &Game) {
@@ -222,17 +272,6 @@ pub fn App() -> Html {
     let policy = use_state(|| vec![0.0; 400]);
     let scores = use_state(|| vec![0.25; 4]);
 
-    // let policy_state = policy.clone();
-    // let scores_state = scores.clone();
-    // let copy = state.clone();
-    // spawn_local({
-    //     async move {
-    //         let response = query_model(&copy).await.unwrap();
-    //         policy_state.set(response.policy);
-    //         scores_state.set(response.values);
-    //     }
-    // });
-
     let on_board_drop = {
         let state = state.clone();
         let policy = policy.clone();
@@ -251,32 +290,27 @@ pub fn App() -> Html {
                     return;
                 }
             };
-            let game = new_state.clone();
-            state.set(new_state);
+            
+            state.set(new_state.clone());
 
             // Check if game is over
-            if game.is_terminal() {
-                alert_game_over(&game);
+            if new_state.is_terminal() {
+                alert_game_over(&new_state);
                 return;
             }
 
-            // Handle AI moves
-            let state = state.clone();
-            let policy_state = policy.clone();
-            let scores_state = scores.clone();
-            spawn_local({
-                async move {
-                    let new_state = handle_ai_moves(game.clone()).await;
-                    state.set(new_state.clone());
-                    if new_state.is_terminal() {
-                        alert_game_over(&game);
-                    }
-
-                    // Get Policy and Eval
-                    let response = query_model(&new_state).await.unwrap();
-                    policy_state.set(response.policy);
-                    scores_state.set(softmax(response.values));
-                }
+            // Start the chain of AI moves
+            let state_clone = state.clone();
+            let policy_clone = policy.clone();
+            let scores_clone = scores.clone();
+            
+            spawn_local(async move {
+                handle_single_ai_move(
+                    new_state,
+                    state_clone,
+                    policy_clone,
+                    scores_clone,
+                ).await;
             });
         })
     };

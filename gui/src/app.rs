@@ -376,10 +376,10 @@ pub fn App() -> Html {
                 <div class="side-panel">
                     <h2>{ "Controls" }</h2>
                     <p class="controls-text">{"
-                        Start in the upper left\n
-                        Place Piece: Drag\n
-                        Rotate Piece: click then 'r'\n
-                        Flip Piece: click then 'f'\n
+                        Start: upper left\n
+                        Play: drag\n
+                        Rotate: click then 'r'\n
+                        Flip: click then 'f'\n
                     "}</p>
                     
                     <div class="checkbox-group">

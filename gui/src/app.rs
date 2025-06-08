@@ -375,21 +375,26 @@ pub fn App() -> Html {
 
                 <div class="side-panel">
                     <h2>{ "Controls" }</h2>
-                    <p style={"white-space: pre-line"}>{"
+                    <p class="controls-text">{"
                         Start in the upper left\n
                         Place Piece: Drag\n
                         Rotate Piece: click then 'r'\n
                         Flip Piece: click then 'f'\n
                     "}</p>
-                    <label>
-                        <input type="checkbox" checked={*show_eval} onclick={toggle_eval}/>
-                        { "Show Eval Bar" }
-                    </label>
-                    <label>
-                        <input type="checkbox" checked={*show_policy} onclick={toggle_policy}/>
-                        { "Show AI Heat Map" }
-                    </label>
+                    
+                    <div class="checkbox-group">
+                        <label>
+                            <input type="checkbox" checked={*show_eval} onclick={toggle_eval}/>
+                            { "Show Eval Bar" }
+                        </label>
+                        <label>
+                            <input type="checkbox" checked={*show_policy} onclick={toggle_policy}/>
+                            { "Show AI Heat Map" }
+                        </label>
+                    </div>
+                    
                     <button onclick={on_reset}>{ "Reset Game" }</button>
+                    <a href="https://github.com/alexracape/blokus-engine">{"Learn more about the project"}</a>
                 </div>
 
             </div>

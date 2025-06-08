@@ -1,8 +1,9 @@
-# Blokus Engine
+# AlphaBlokus
 
 ![blokus_ai](https://github.com/user-attachments/assets/b0e97f83-328a-4218-b4cf-80c7819ab331)
 
-Checkout the hosted GUI [here](https://alexracape.github.io/blokus-engine/)
+Checkout the deployed [GUI](https://alexracape.github.io/blokus-engine/) or the [research paper](https://github.com/alexracape/blokus-engine/blob/f9a582c08a814e226d02e442f456ea30a3757abc/report.pdf)
+
 
 
 ## Project Outline

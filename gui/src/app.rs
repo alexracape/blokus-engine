@@ -338,7 +338,7 @@ pub fn App() -> Html {
     html! {
         <div>
             <div class="title">
-                <h1>{ "Blokus Engine" }</h1>
+                <h1>{ "AlphaBlokus" }</h1>
             </div>
 
             <div class="container">
@@ -376,10 +376,10 @@ pub fn App() -> Html {
                 <div class="side-panel">
                     <h2>{ "Controls" }</h2>
                     <p style={"white-space: pre-line"}>{"
-                        Select Piece: Click\n
+                        Start in the upper left\n
                         Place Piece: Drag\n
-                        Rotate Piece: r\n
-                        Flip Piece: f\n
+                        Rotate Piece: click then 'r'\n
+                        Flip Piece: click then 'f'\n
                     "}</p>
                     <label>
                         <input type="checkbox" checked={*show_eval} onclick={toggle_eval}/>

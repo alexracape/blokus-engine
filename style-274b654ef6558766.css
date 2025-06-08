@@ -39,6 +39,7 @@ body {
     flex-direction: column;
     justify-content: center;
     padding: 10px;
+    gap: 16px;
     border-radius: 10px;
     border-color: var(--board-color);
     border-style: solid;
@@ -51,6 +52,38 @@ body {
     .side-panel {
         display: none; /* Hide side panels on smaller screens */
     }
+}
+
+.side-panel h2 {
+    margin: 24px 0 0px 0;
+}
+
+.controls-text {
+    margin: 0;
+    line-height: 1.0; /* Tighter line spacing */
+    white-space: pre-line;
+}
+
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px; /* Tight spacing between checkboxes */
+}
+
+.checkbox-group label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    margin: 0; /* Remove any default margins */
+}
+
+.side-panel button {
+    padding: 8px 16px;
+}
+
+.side-panel a {
+    color: #0066cc;
 }
 
 .player-icons {
